@@ -3826,6 +3826,7 @@ QuestTogether:RegisterTest("separate QuestTogether chat logs can also print to m
 	local printedToMain = {}
 	local fallbackPrinted = {}
 	local separateFrame = {
+		isDocked = true,
 		AddMessage = function(_, message)
 			printedToSeparate[#printedToSeparate + 1] = message
 		end,
@@ -3844,13 +3845,17 @@ QuestTogether:RegisterTest("separate QuestTogether chat logs can also print to m
 	WithPatchedMethod(QuestTogether, "GetResolvedChatLogDestination", function()
 		return "separate"
 	end, function()
-		WithPatchedMethod(QuestTogether, "GetChatLogFrame", function()
+		WithPatchedMethod(QuestTogether, "FindVisibleQuestLogChatFrame", function()
 			return separateFrame
 		end, function()
-			WithPatchedMethod(QuestTogether, "GetMainChatFrame", function()
-				return mainFrame
+			WithPatchedMethod(QuestTogether, "GetChatLogFrame", function()
+				return separateFrame
 			end, function()
-				QuestTogether:PrintConsoleAnnouncement("hello there", "MyPlayer-Realm", "MAGE")
+				WithPatchedMethod(QuestTogether, "GetMainChatFrame", function()
+					return mainFrame
+				end, function()
+					QuestTogether:PrintConsoleAnnouncement("hello there", "MyPlayer-Realm", "MAGE")
+				end)
 			end)
 		end)
 	end)
@@ -3860,6 +3865,51 @@ QuestTogether:RegisterTest("separate QuestTogether chat logs can also print to m
 	AssertEquals(#fallbackPrinted, 0)
 	AssertTrue(string.find(printedToSeparate[1], "hello there", 1, true) ~= nil)
 	AssertTrue(string.find(printedToMain[1], "hello there", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("undocked separate QuestTogether chat logs do not also print to main chat", function()
+	local printedToSeparate = {}
+	local printedToMain = {}
+	local fallbackPrinted = {}
+	local separateFrame = {
+		isDocked = false,
+		AddMessage = function(_, message)
+			printedToSeparate[#printedToSeparate + 1] = message
+		end,
+	}
+	local mainFrame = {
+		AddMessage = function(_, message)
+			printedToMain[#printedToMain + 1] = message
+		end,
+	}
+
+	QuestTogether.db.profile.mirrorChatLogsToMainChat = true
+	QuestTogether.PrintRaw = function(_, message)
+		fallbackPrinted[#fallbackPrinted + 1] = message
+	end
+
+	WithPatchedMethod(QuestTogether, "GetResolvedChatLogDestination", function()
+		return "separate"
+	end, function()
+		WithPatchedMethod(QuestTogether, "FindVisibleQuestLogChatFrame", function()
+			return separateFrame
+		end, function()
+			WithPatchedMethod(QuestTogether, "GetChatLogFrame", function()
+				return separateFrame
+			end, function()
+				WithPatchedMethod(QuestTogether, "GetMainChatFrame", function()
+					return mainFrame
+				end, function()
+					QuestTogether:PrintConsoleAnnouncement("hello there", "MyPlayer-Realm", "MAGE")
+				end)
+			end)
+		end)
+	end)
+
+	AssertEquals(#printedToSeparate, 1)
+	AssertEquals(#printedToMain, 0)
+	AssertEquals(#fallbackPrinted, 0)
+	AssertTrue(string.find(printedToSeparate[1], "hello there", 1, true) ~= nil)
 end)
 
 QuestTogether:RegisterTest("main chat log destination does not duplicate mirrored writes", function()

@@ -347,6 +347,21 @@ local function CreateDropdown(parent, titleText, tooltipText, x, y, width, initi
 	return dropdown
 end
 
+local function CreateScrollablePanelContent(parent, minimumHeight)
+	local scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+	scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+	scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -28, 0)
+
+	local content = CreateFrame("Frame", nil, scrollFrame)
+	content:SetSize(672, minimumHeight or 600)
+	scrollFrame:SetScrollChild(content)
+	scrollFrame:SetScript("OnSizeChanged", function(_, width)
+		content:SetWidth(math.max(672, width - 8))
+	end)
+
+	return scrollFrame, content
+end
+
 local function CreateOptionDropdown(parent, titleText, tooltipText, x, y, width, values, getLabel, optionKey, currentValueGetter)
 	return CreateDropdown(
 		parent,
@@ -380,7 +395,7 @@ end
 local function CreateShowProgressForDropdown(parent, x, y)
 	return CreateOptionDropdown(
 		parent,
-		"Show Progress For",
+		"Show Announcements For",
 		"Choose whether to display grouped players only, or grouped plus nearby players with visible nameplates.",
 		x,
 		y,
@@ -475,6 +490,22 @@ end
 local function RefreshDropdownControl(dropdown, labelText)
 	UIDropDownMenu_Initialize(dropdown, dropdown.initializeMenu)
 	UIDropDownMenu_SetText(dropdown, labelText)
+end
+
+local function SetLabeledControlShown(control, shown)
+	if not control then
+		return
+	end
+
+	if control.SetShown then
+		control:SetShown(shown)
+	end
+	if control.Label and control.Label.SetShown then
+		control.Label:SetShown(shown)
+	end
+	if control.title and control.title.SetShown then
+		control.title:SetShown(shown)
+	end
 end
 
 local function RefreshQuestPlatesPreview(controls)
@@ -689,7 +720,7 @@ function QuestTogether:RefreshHomeWindow()
 	local chatLogsEnabled = self:GetOption("showChatLogs") and "On" or "Off"
 	local chatLogDestination = self:GetChatLogDestinationLabel(self:GetOption("chatLogDestination"))
 	if self:GetOption("chatLogDestination") == "separate" and self:GetOption("mirrorChatLogsToMainChat") == true then
-		chatLogDestination = chatLogDestination .. " + Main Chat"
+		chatLogDestination = chatLogDestination .. " + Main Chat When Docked"
 	end
 	local chatBubblesEnabled = self:GetOption("showChatBubbles") and "On" or "Off"
 	local questIconEnabled = self:GetOption("nameplateQuestIconEnabled") and "On" or "Off"
@@ -726,13 +757,6 @@ function QuestTogether:RefreshWhereToAnnounceWindow()
 
 	local controls = self.whereToAnnounceControls
 	RefreshCheckboxOptions(controls)
-
-	if controls.showProgressForDropdown then
-		RefreshDropdownControl(
-			controls.showProgressForDropdown,
-			self:GetShowProgressForLabel(self:GetOption("showProgressFor"))
-		)
-	end
 
 	if controls.chatLogDestinationDropdown then
 		RefreshDropdownControl(
@@ -771,13 +795,7 @@ function QuestTogether:RefreshWhereToAnnounceWindow()
 		end
 	end
 	if controls.mirrorChatLogsToMainChat then
-		if controls.mirrorChatLogsToMainChat.SetEnabled then
-			controls.mirrorChatLogsToMainChat:SetEnabled(showMirrorChatLogControl)
-		end
-		controls.mirrorChatLogsToMainChat:SetAlpha(showMirrorChatLogControl and 1 or 0.5)
-		if controls.mirrorChatLogsToMainChat.Label then
-			controls.mirrorChatLogsToMainChat.Label:SetAlpha(showMirrorChatLogControl and 1 or 0.5)
-		end
+		SetLabeledControlShown(controls.mirrorChatLogsToMainChat, showMirrorChatLogControl)
 	end
 end
 
@@ -827,6 +845,13 @@ function QuestTogether:RefreshAnnouncementsWindow()
 	end
 
 	RefreshCheckboxOptions(self.announcementControls)
+
+	if self.announcementControls.showProgressForDropdown then
+		RefreshDropdownControl(
+			self.announcementControls.showProgressForDropdown,
+			self:GetShowProgressForLabel(self:GetOption("showProgressFor"))
+		)
+	end
 end
 
 local function RegisterSubcategory(parentCategory, frame, categoryName)
@@ -941,11 +966,13 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 	frame.name = "Profiles"
 	frame.parent = "QuestTogether"
 
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -16)
+	local _, content = CreateScrollablePanelContent(frame, 560)
+
+	local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -16)
 	title:SetText("QuestTogether Profiles")
 
-	local description = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local description = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 	description:SetWidth(640)
 	description:SetJustifyH("LEFT")
@@ -954,7 +981,7 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 	)
 
 	local currentProfileDropdown = CreateDropdown(
-		frame,
+		content,
 		"Current Profile",
 		"Switch this character to another profile.",
 		16,
@@ -980,7 +1007,7 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 	)
 
 	local copyFromDropdown = CreateDropdown(
-		frame,
+		content,
 		"Copy Into Current Profile",
 		"Pick another profile, then click Copy.",
 		16,
@@ -1002,12 +1029,12 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 		end
 	)
 
-	local copyButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local copyButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	copyButton:SetSize(90, 22)
 	if copyFromDropdown and copyFromDropdown.Button then
 		copyButton:SetPoint("LEFT", copyFromDropdown.Button, "RIGHT", 16, 0)
 	else
-		copyButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 280, -185)
+		copyButton:SetPoint("TOPLEFT", content, "TOPLEFT", 280, -185)
 	end
 	copyButton:SetText("Copy")
 	copyButton:SetScript("OnClick", function()
@@ -1021,19 +1048,19 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 		QuestTogether:RefreshProfilesWindow()
 	end)
 
-	local createProfileTitle = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	createProfileTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -240)
+	local createProfileTitle = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	createProfileTitle:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -240)
 	createProfileTitle:SetText("Create And Switch To New Profile")
 
-	local createProfileEdit = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+	local createProfileEdit = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
 	createProfileEdit:SetAutoFocus(false)
 	createProfileEdit:SetSize(240, 24)
-	createProfileEdit:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -264)
+	createProfileEdit:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -264)
 	createProfileEdit:SetTextInsets(6, 6, 0, 0)
 
-	local createProfileButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local createProfileButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	createProfileButton:SetSize(90, 22)
-	createProfileButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 280, -266)
+	createProfileButton:SetPoint("TOPLEFT", content, "TOPLEFT", 280, -266)
 	createProfileButton:SetText("Create")
 
 	local function CreateAndActivateProfile()
@@ -1061,9 +1088,9 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 		self:ClearFocus()
 	end)
 
-	local resetButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local resetButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	resetButton:SetSize(180, 22)
-	resetButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -314)
+	resetButton:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -314)
 	resetButton:SetText("Reset Active Profile")
 	resetButton:SetScript("OnClick", function()
 		local ok, err = QuestTogether:ResetActiveProfile()
@@ -1076,7 +1103,7 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 	end)
 
 	local deleteProfileDropdown = CreateDropdown(
-		frame,
+		content,
 		"Delete Profile",
 		"Pick another profile, then click Delete.",
 		16,
@@ -1098,12 +1125,12 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 		end
 	)
 
-	local deleteButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local deleteButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	deleteButton:SetSize(90, 22)
 	if deleteProfileDropdown and deleteProfileDropdown.Button then
 		deleteButton:SetPoint("LEFT", deleteProfileDropdown.Button, "RIGHT", 16, 0)
 	else
-		deleteButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 280, -395)
+		deleteButton:SetPoint("TOPLEFT", content, "TOPLEFT", 280, -395)
 	end
 	deleteButton:SetText("Delete")
 	deleteButton:SetScript("OnClick", function()
@@ -1119,8 +1146,8 @@ function QuestTogether:InitializeProfilesWindow(parentCategory)
 		QuestTogether:RefreshProfilesWindow()
 	end)
 
-	local profileSummary = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	profileSummary:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -448)
+	local profileSummary = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	profileSummary:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -448)
 	profileSummary:SetWidth(640)
 	profileSummary:SetJustifyH("LEFT")
 	profileSummary:SetText("")
@@ -1160,43 +1187,49 @@ function QuestTogether:InitializeAnnouncementsWindow(parentCategory)
 	frame.name = "What to Announce"
 	frame.parent = "QuestTogether"
 
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -16)
+	local _, content = CreateScrollablePanelContent(frame, 720)
+
+	local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -16)
 	title:SetText("What To Announce")
 
-	local description = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local description = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 	description:SetWidth(640)
 	description:SetJustifyH("LEFT")
 	description:SetText("Choose exactly which quest-related events QuestTogether should broadcast to others.")
 
-	CreateAnnouncementGroupHeader(frame, "Quests", "quest", 16, -82, 620)
-	local announceAccepted = CreateCheckbox(frame, "announceAccepted", "Announce Quest Acceptance", "", 32, -112)
-	local announceCompleted = CreateCheckbox(frame, "announceCompleted", "Announce Quest Completion", "", 32, -140)
-	local announceReadyToTurnIn = CreateCheckbox(frame, "announceReadyToTurnIn", "Announce Ready To Turn In", "", 32, -168)
-	local announceRemoved = CreateCheckbox(frame, "announceRemoved", "Announce Quest Removal", "", 32, -196)
-	local announceProgress = CreateCheckbox(frame, "announceProgress", "Announce Quest Progress", "", 32, -224)
+	CreateAnnouncementGroupHeader(content, "Announcement Scope", "quest", 16, -82, 620)
+	local showProgressForDropdown = CreateShowProgressForDropdown(content, 32, -112)
 
-	CreateAnnouncementGroupHeader(frame, "World Quests", "world", 16, -270, 620)
+	CreateAnnouncementGroupHeader(content, "Quests", "quest", 16, -170, 620)
+	local announceAccepted = CreateCheckbox(content, "announceAccepted", "Announce Quest Acceptance", "", 32, -200)
+	local announceCompleted = CreateCheckbox(content, "announceCompleted", "Announce Quest Completion", "", 32, -228)
+	local announceReadyToTurnIn = CreateCheckbox(content, "announceReadyToTurnIn", "Announce Ready To Turn In", "", 32, -256)
+	local announceRemoved = CreateCheckbox(content, "announceRemoved", "Announce Quest Removal", "", 32, -284)
+	local announceProgress = CreateCheckbox(content, "announceProgress", "Announce Quest Progress", "", 32, -312)
+
+	CreateAnnouncementGroupHeader(content, "World Quests", "world", 16, -358, 620)
 	local announceWorldQuestAreaEnter =
-		CreateCheckbox(frame, "announceWorldQuestAreaEnter", "Announce Area Enter", "", 32, -300)
+		CreateCheckbox(content, "announceWorldQuestAreaEnter", "Announce Area Enter", "", 32, -388)
 	local announceWorldQuestAreaLeave =
-		CreateCheckbox(frame, "announceWorldQuestAreaLeave", "Announce Area Leave", "", 32, -328)
-	local announceWorldQuestProgress = CreateCheckbox(frame, "announceWorldQuestProgress", "Announce Progress", "", 32, -356)
+		CreateCheckbox(content, "announceWorldQuestAreaLeave", "Announce Area Leave", "", 32, -416)
+	local announceWorldQuestProgress = CreateCheckbox(content, "announceWorldQuestProgress", "Announce Progress", "", 32, -444)
 	local announceWorldQuestCompleted =
-		CreateCheckbox(frame, "announceWorldQuestCompleted", "Announce Completion", "", 32, -384)
+		CreateCheckbox(content, "announceWorldQuestCompleted", "Announce Completion", "", 32, -472)
 
-	CreateAnnouncementGroupHeader(frame, "Bonus Objectives", "bonus", 16, -430, 620)
+	CreateAnnouncementGroupHeader(content, "Bonus Objectives", "bonus", 16, -518, 620)
 	local announceBonusObjectiveAreaEnter =
-		CreateCheckbox(frame, "announceBonusObjectiveAreaEnter", "Announce Area Enter", "", 32, -460)
+		CreateCheckbox(content, "announceBonusObjectiveAreaEnter", "Announce Area Enter", "", 32, -548)
 	local announceBonusObjectiveAreaLeave =
-		CreateCheckbox(frame, "announceBonusObjectiveAreaLeave", "Announce Area Leave", "", 32, -488)
+		CreateCheckbox(content, "announceBonusObjectiveAreaLeave", "Announce Area Leave", "", 32, -576)
 	local announceBonusObjectiveProgress =
-		CreateCheckbox(frame, "announceBonusObjectiveProgress", "Announce Progress", "", 32, -516)
+		CreateCheckbox(content, "announceBonusObjectiveProgress", "Announce Progress", "", 32, -604)
 	local announceBonusObjectiveCompleted =
-		CreateCheckbox(frame, "announceBonusObjectiveCompleted", "Announce Completion", "", 32, -544)
+		CreateCheckbox(content, "announceBonusObjectiveCompleted", "Announce Completion", "", 32, -632)
 
 	self.announcementControls = {
+		showProgressForDropdown = showProgressForDropdown,
 		announceAccepted = announceAccepted,
 		announceCompleted = announceCompleted,
 		announceReadyToTurnIn = announceReadyToTurnIn,
@@ -1230,63 +1263,64 @@ function QuestTogether:InitializeWhereToAnnounceWindow(parentCategory)
 	frame.name = "Where to Announce"
 	frame.parent = "QuestTogether"
 
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -16)
+	local _, content = CreateScrollablePanelContent(frame, 520)
+
+	local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -16)
 	title:SetText("Where To Announce")
 
-	local description = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local description = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 	description:SetWidth(640)
 	description:SetJustifyH("LEFT")
 	description:SetText("Control where QuestTogether displays progress updates and chat output.")
 
-	local chatLogHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	chatLogHeader:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -82)
+	local chatLogHeader = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	chatLogHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -82)
 	chatLogHeader:SetText("Chat Log Output")
 
 	local showChatLogs = CreateCheckbox(
-		frame,
+		content,
 		"showChatLogs",
 		"Show Chat Logs",
 		"Print QuestTogether announcements in chat when the sender is grouped or nearby.",
 		16,
 		-106
 	)
-	local chatLogDestinationDropdown = CreateChatLogDestinationDropdown(frame, 330, -106)
+	local chatLogDestinationDropdown = CreateChatLogDestinationDropdown(content, 36, -152)
 	local mirrorChatLogsToMainChat = CreateCheckbox(
-		frame,
+		content,
 		"mirrorChatLogsToMainChat",
-		"Also Print to Main Chat",
-		"When using the separate QuestTogether chat tab, also print each QuestTogether log line to your main chat window.",
-		36,
-		-152
+		"Also Print To Main Chat If Docked As A Tab",
+		"Only applies when the separate QuestTogether chat window is docked as a tab. If it is floating in its own window, logs stay there only.",
+		56,
+		-198
 	)
-	local showProgressForDropdown = CreateShowProgressForDropdown(frame, 330, -152)
 
-	local bubbleHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	bubbleHeader:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -228)
+	local bubbleHeader = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	bubbleHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -274)
 	bubbleHeader:SetText("Chat Bubbles")
 
 	local showChatBubbles = CreateCheckbox(
-		frame,
+		content,
 		"showChatBubbles",
 		"Show Chat Bubbles",
 		"Display QuestTogether bubbles over nearby players and on your personal bubble anchor.",
 		16,
-		-252
+		-298
 	)
 	local hideMyOwnChatBubbles = CreateCheckbox(
-		frame,
+		content,
 		"hideMyOwnChatBubbles",
 		"Hide My Own Chat Bubbles",
 		"If enabled, your client still sends local progress to others but does not show your own QuestTogether bubbles.",
 		36,
-		-280
+		-326
 	)
 
-	local openHudEditMode = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local openHudEditMode = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	openHudEditMode:SetSize(180, 24)
-	openHudEditMode:SetPoint("TOPLEFT", frame, "TOPLEFT", 36, -312)
+	openHudEditMode:SetPoint("TOPLEFT", content, "TOPLEFT", 36, -358)
 	openHudEditMode:SetText("Open HUD Edit Mode")
 	openHudEditMode:SetScript("OnClick", function()
 		QuestTogether:Debug("Open HUD Edit Mode button clicked", "options")
@@ -1295,8 +1329,8 @@ function QuestTogether:InitializeWhereToAnnounceWindow(parentCategory)
 		end
 	end)
 
-	local personalBubbleEditHint = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	personalBubbleEditHint:SetPoint("TOPLEFT", frame, "TOPLEFT", 36, -344)
+	local personalBubbleEditHint = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	personalBubbleEditHint:SetPoint("TOPLEFT", content, "TOPLEFT", 36, -390)
 	personalBubbleEditHint:SetJustifyH("LEFT")
 	personalBubbleEditHint:SetWidth(560)
 	personalBubbleEditHint:SetText(
@@ -1305,11 +1339,10 @@ function QuestTogether:InitializeWhereToAnnounceWindow(parentCategory)
 
 	self.whereToAnnounceControls = {
 		showChatBubbles = showChatBubbles,
-			hideMyOwnChatBubbles = hideMyOwnChatBubbles,
-			showChatLogs = showChatLogs,
-			chatLogDestinationDropdown = chatLogDestinationDropdown,
-			mirrorChatLogsToMainChat = mirrorChatLogsToMainChat,
-			showProgressForDropdown = showProgressForDropdown,
+		hideMyOwnChatBubbles = hideMyOwnChatBubbles,
+		showChatLogs = showChatLogs,
+		chatLogDestinationDropdown = chatLogDestinationDropdown,
+		mirrorChatLogsToMainChat = mirrorChatLogsToMainChat,
 		openHudEditMode = openHudEditMode,
 		personalBubbleEditHint = personalBubbleEditHint,
 	}
@@ -1334,27 +1367,29 @@ function QuestTogether:InitializeQuestPlatesWindow(parentCategory)
 	frame.name = "Quest Plates"
 	frame.parent = "QuestTogether"
 
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -16)
+	local _, content = CreateScrollablePanelContent(frame, 560)
+
+	local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -16)
 	title:SetText("Quest Plates")
 
-	local description = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local description = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 	description:SetWidth(640)
 	description:SetJustifyH("LEFT")
 	description:SetText("Customize quest objective visuals on Blizzard nameplates.")
 
 	local nameplateQuestIconEnabled = CreateCheckbox(
-		frame,
+		content,
 		"nameplateQuestIconEnabled",
 		"Quest Objective Icon",
 		"Show a quest icon on default Blizzard nameplates when a unit is a quest objective.",
 		16,
 		-82
 	)
-	local nameplateQuestIconStyleDropdown = CreateNameplateIconStyleDropdown(frame, 36, -108)
+	local nameplateQuestIconStyleDropdown = CreateNameplateIconStyleDropdown(content, 36, -108)
 	local nameplateQuestHealthColorEnabled = CreateCheckbox(
-		frame,
+		content,
 		"nameplateQuestHealthColorEnabled",
 		"Quest Objective Health Color",
 		"Tint quest-objective nameplate health bars with your selected quest color.",
@@ -1362,7 +1397,7 @@ function QuestTogether:InitializeQuestPlatesWindow(parentCategory)
 		-150
 	)
 	local nameplateQuestHealthColor = CreateColorSwatch(
-		frame,
+		content,
 		"nameplateQuestHealthColor",
 		"Quest Health Color",
 		"Choose the color used to tint quest-objective nameplate health bars.",
@@ -1370,7 +1405,7 @@ function QuestTogether:InitializeQuestPlatesWindow(parentCategory)
 		36,
 		-177
 	)
-	local resetNameplateQuestHealthColor = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local resetNameplateQuestHealthColor = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	resetNameplateQuestHealthColor:SetSize(70, 20)
 	resetNameplateQuestHealthColor:SetPoint("LEFT", nameplateQuestHealthColor, "RIGHT", 140, 0)
 	resetNameplateQuestHealthColor:SetText("Reset")
@@ -1386,11 +1421,11 @@ function QuestTogether:InitializeQuestPlatesWindow(parentCategory)
 		QuestTogether:RefreshOptionsWindow()
 	end)
 
-	local previewHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	previewHeader:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -238)
+	local previewHeader = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	previewHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -238)
 	previewHeader:SetText("Preview")
 
-	local previewHint = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local previewHint = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	previewHint:SetPoint("TOPLEFT", previewHeader, "BOTTOMLEFT", 0, -4)
 	previewHint:SetWidth(640)
 	previewHint:SetJustifyH("LEFT")
@@ -1398,8 +1433,8 @@ function QuestTogether:InitializeQuestPlatesWindow(parentCategory)
 
 	-- Use an isolated local frame instead of Blizzard's script nameplate preview template.
 	-- This avoids registering a real preview nameplate/unit token and reduces taint risk.
-	local previewFrame = CreateFrame("Frame", nil, frame)
-	previewFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -280)
+	local previewFrame = CreateFrame("Frame", nil, content)
+	previewFrame:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -280)
 	previewFrame:SetSize(620, QUEST_PLATE_PREVIEW_FRAME_HEIGHT)
 
 	local previewBackground = previewFrame:CreateTexture(nil, "BACKGROUND")
@@ -1551,18 +1586,20 @@ function QuestTogether:InitializeMiscWindow(parentCategory)
 	frame.name = "Miscellaneous"
 	frame.parent = "QuestTogether"
 
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -16)
+	local _, content = CreateScrollablePanelContent(frame, 280)
+
+	local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -16)
 	title:SetText("Miscellaneous")
 
-	local description = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	local description = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 	description:SetWidth(640)
 	description:SetJustifyH("LEFT")
 	description:SetText("Other behavior toggles and utility actions.")
 
 	local emoteOnQuestCompletion = CreateCheckbox(
-		frame,
+		content,
 		"emoteOnQuestCompletion",
 		"Emote On Quest Completion",
 		"If disabled, this character never performs local quest completion emotes.",
@@ -1570,25 +1607,25 @@ function QuestTogether:InitializeMiscWindow(parentCategory)
 		-82
 	)
 	local emoteOnNearbyPlayerQuestCompletion = CreateCheckbox(
-		frame,
+		content,
 		"emoteOnNearbyPlayerQuestCompletion",
 		"Emote On Nearby Player Quest Completion",
 		"If disabled, this character will not mirror nearby players' quest completion emotes.",
 		16,
 		-110
 	)
-	local debugMode = CreateCheckbox(frame, "debugMode", "Debug Mode", "Print debug output in chat.", 16, -138)
+	local debugMode = CreateCheckbox(content, "debugMode", "Debug Mode", "Print debug output in chat.", 16, -138)
 
-	local testButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local testButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	testButton:SetSize(180, 24)
-	testButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -180)
+	testButton:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -180)
 	testButton:SetText("Run In-Game Tests")
 	testButton:SetScript("OnClick", function()
 		QuestTogether:Debug("Run In-Game Tests button clicked", "options")
 		QuestTogether:RunTests()
 	end)
 
-	local scanButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	local scanButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	scanButton:SetSize(180, 24)
 	scanButton:SetPoint("LEFT", testButton, "RIGHT", 10, 0)
 	scanButton:SetText("Rescan Quest Log")
@@ -1635,19 +1672,21 @@ function QuestTogether:InitializeOptionsWindow()
 	local frame = CreateFrame("Frame", "QuestTogetherHomePanel")
 	frame.name = "QuestTogether"
 
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -16)
+	local _, content = CreateScrollablePanelContent(frame, 420)
+
+	local title = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -16)
 	title:SetText("QuestTogether")
 
-	local description = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	local description = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	description:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
 	description:SetWidth(640)
 	description:SetJustifyH("LEFT")
 	description:SetText(
-		"QuestTogether shares quest progress between party members and nearby players so everyone can see objectives move in real time."
+			"QuestTogether shares quest progress between party members and nearby players so everyone can see objectives move in real time."
 	)
 
-	local statusPanel = CreateFrame("Frame", nil, frame)
+	local statusPanel = CreateFrame("Frame", nil, content)
 	statusPanel:SetPoint("TOPLEFT", description, "BOTTOMLEFT", 0, -18)
 	statusPanel:SetSize(360, 220)
 
@@ -1672,7 +1711,7 @@ function QuestTogether:InitializeOptionsWindow()
 	end
 	statusText:SetText("")
 
-	local actionsPanel = CreateFrame("Frame", nil, frame)
+	local actionsPanel = CreateFrame("Frame", nil, content)
 	actionsPanel:SetPoint("TOPLEFT", statusPanel, "TOPRIGHT", 16, 0)
 	actionsPanel:SetSize(260, 220)
 
@@ -1721,11 +1760,11 @@ function QuestTogether:InitializeOptionsWindow()
 		QuestTogether:PrintHelp()
 	end)
 
-	local tipsHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	local tipsHeader = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	tipsHeader:SetPoint("TOPLEFT", statusPanel, "BOTTOMLEFT", 0, -18)
 	tipsHeader:SetText("Tips")
 
-	local tipsText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	local tipsText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	tipsText:SetPoint("TOPLEFT", tipsHeader, "BOTTOMLEFT", 0, -8)
 	tipsText:SetWidth(640)
 	tipsText:SetJustifyH("LEFT")

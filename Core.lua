@@ -2041,7 +2041,12 @@ function QuestTogether:ShouldMirrorChatLogsToMainChat()
 		return false
 	end
 
-	return self:GetResolvedChatLogDestination() == "separate"
+	if self:GetResolvedChatLogDestination() ~= "separate" then
+		return false
+	end
+
+	local chatFrame = self:FindVisibleQuestLogChatFrame()
+	return self:IsChatFrameDocked(chatFrame)
 end
 
 function QuestTogether:GetMainChatFrame()
@@ -2199,6 +2204,44 @@ function QuestTogether:IsQuestLogChatFrameVisible(chatFrame)
 
 	local chatTab = _G[frameName .. "Tab"]
 	return self:CanAccessForeignFrame(chatTab) and chatTab.IsShown and chatTab:IsShown() or false
+end
+
+function QuestTogether:IsChatFrameDocked(chatFrame)
+	if not self:CanAccessForeignFrame(chatFrame) then
+		return false
+	end
+
+	if chatFrame.IsDocked then
+		local ok, isDocked = pcall(chatFrame.IsDocked, chatFrame)
+		if ok and type(isDocked) == "boolean" then
+			return isDocked
+		end
+	end
+
+	if type(chatFrame.isDocked) == "boolean" then
+		return chatFrame.isDocked
+	end
+
+	local frameName = chatFrame.GetName and chatFrame:GetName()
+	if frameName and frameName ~= "" then
+		local chatTab = _G[frameName .. "Tab"]
+		if self:CanAccessForeignFrame(chatTab) and type(chatTab.isDocked) == "boolean" then
+			return chatTab.isDocked
+		end
+	end
+
+	if FCFDock_GetChatFrames and GENERAL_CHAT_DOCK then
+		local ok, dockedFrames = pcall(FCFDock_GetChatFrames, GENERAL_CHAT_DOCK)
+		if ok and type(dockedFrames) == "table" then
+			for _, dockedFrame in ipairs(dockedFrames) do
+				if dockedFrame == chatFrame then
+					return true
+				end
+			end
+		end
+	end
+
+	return false
 end
 
 function QuestTogether:HandleQuestLogChatFrameClosed(chatFrame)
