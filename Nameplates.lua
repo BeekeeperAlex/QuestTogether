@@ -2044,7 +2044,8 @@ function QuestTogether:ApplyResolvedQuestStateToNameplate(
 	unitToken,
 	unitFrame,
 	isQuestObjective,
-	scheduleTintFollowUp
+	scheduleTintFollowUp,
+	resolvedUnitGuid
 )
 	if not namePlateFrameBase or not unitFrame then
 		return
@@ -2054,8 +2055,7 @@ function QuestTogether:ApplyResolvedQuestStateToNameplate(
 	if not self:IsNameplateUnitToken(resolvedUnitToken) then
 		resolvedUnitToken = ResolveNameplateUnitToken(namePlateFrameBase, unitFrame)
 	end
-	local resolvedUnitGuid = nil
-	if self:IsNameplateUnitToken(resolvedUnitToken) then
+	if not IsNonEmptyString(resolvedUnitGuid) and self:IsNameplateUnitToken(resolvedUnitToken) then
 		resolvedUnitGuid = self:GetNameplateTooltipScanGuid(resolvedUnitToken, unitFrame)
 	end
 
@@ -3135,7 +3135,7 @@ function QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 	local unitFrame = namePlateFrameBase.UnitFrame
 	local unitToken = ResolveNameplateUnitToken(namePlateFrameBase, unitFrame)
 	local allowLiveScan = not self:IsWorldMapVisibleForNameplateRefresh()
-	local hasResolvedQuestState, isQuestObjective = self:TryResolveNameplateQuestObjectiveState(
+	local hasResolvedQuestState, isQuestObjective, resolvedUnitGuid = self:TryResolveNameplateQuestObjectiveState(
 		unitToken,
 		unitFrame,
 		allowLiveScan
@@ -3153,7 +3153,14 @@ function QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 		return
 	end
 
-	self:ApplyResolvedQuestStateToNameplate(namePlateFrameBase, unitToken, unitFrame, isQuestObjective, true)
+	self:ApplyResolvedQuestStateToNameplate(
+		namePlateFrameBase,
+		unitToken,
+		unitFrame,
+		isQuestObjective,
+		allowLiveScan,
+		resolvedUnitGuid
+	)
 end
 
 function QuestTogether:HideNameplateIcon(namePlateFrameBase)
