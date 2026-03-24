@@ -120,6 +120,40 @@ local function IsWorldMapVisible(addon)
 	return addon.API.IsWorldMapVisible() and true or false
 end
 
+local DrainQueuedQuestLogTasks
+
+function QuestTogether:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
+	if self.questLogTaskMapVisibilityRetryPending then
+		return
+	end
+
+	local delayFn = self.API and self.API.Delay
+	if type(delayFn) ~= "function" then
+		return
+	end
+
+	self.questLogTaskMapVisibilityRetryPending = true
+	delayFn(0.2, function()
+		QuestTogether.questLogTaskMapVisibilityRetryPending = false
+		if not QuestTogether.isEnabled then
+			return
+		end
+		if not QuestTogether.pendingQuestLogTaskDrain then
+			return
+		end
+		if IsWorldMapVisible(QuestTogether) then
+			QuestTogether:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
+			return
+		end
+
+		QuestTogether.pendingQuestLogTaskDrain = false
+		local drainedCount = DrainQueuedQuestLogTasks(QuestTogether)
+		if drainedCount > 0 then
+			QuestTogether:Debugf("quest", "Resuming deferred quest log tasks after world map hidden count=%d", drainedCount)
+		end
+	end)
+end
+
 local function BuildQuestLogQuestInfoIndex(addon)
 	local questInfoByQuestId = {}
 
@@ -366,7 +400,7 @@ local function SortedQuestIdKeys(tableValue)
 	return keys
 end
 
-local function DrainQueuedQuestLogTasks(addon)
+DrainQueuedQuestLogTasks = function(addon)
 	if not addon then
 		return 0
 	end
@@ -837,10 +871,19 @@ end
 
 function QuestTogether:PLAYER_REGEN_ENABLED()
 	if self.pendingQuestLogTaskDrain then
-		self.pendingQuestLogTaskDrain = false
-		local drainedCount = DrainQueuedQuestLogTasks(self)
-		if drainedCount > 0 then
-			self:Debugf("quest", "Resuming deferred quest log tasks after combat count=%d", drainedCount)
+		if IsWorldMapVisible(self) then
+			self:Debugf(
+				"quest",
+				"Deferring queued quest log tasks while world map is visible count=%d",
+				type(self.onQuestLogUpdate) == "table" and #self.onQuestLogUpdate or 0
+			)
+			self:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
+		else
+			self.pendingQuestLogTaskDrain = false
+			local drainedCount = DrainQueuedQuestLogTasks(self)
+			if drainedCount > 0 then
+				self:Debugf("quest", "Resuming deferred quest log tasks after combat count=%d", drainedCount)
+			end
 		end
 	end
 
@@ -1118,10 +1161,16 @@ end
 
 function QuestTogether:QUEST_LOG_UPDATE()
 	local inCombatLockdown = self.API and self.API.InCombatLockdown and self.API.InCombatLockdown()
-	if inCombatLockdown then
+	local worldMapVisible = IsWorldMapVisible(self)
+	if inCombatLockdown or worldMapVisible then
 		if type(self.onQuestLogUpdate) == "table" and #self.onQuestLogUpdate > 0 then
 			self.pendingQuestLogTaskDrain = true
-			self:Debugf("quest", "Deferring queued quest log tasks during combat count=%d", #self.onQuestLogUpdate)
+			if inCombatLockdown then
+				self:Debugf("quest", "Deferring queued quest log tasks during combat count=%d", #self.onQuestLogUpdate)
+			else
+				self:Debugf("quest", "Deferring queued quest log tasks while world map is visible count=%d", #self.onQuestLogUpdate)
+				self:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
+			end
 		end
 	else
 		local drainedCount = DrainQueuedQuestLogTasks(self)

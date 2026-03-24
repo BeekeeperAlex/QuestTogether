@@ -1452,6 +1452,54 @@ QuestTogether:RegisterTest("quest log queued tasks drain immediately out of comb
 	AssertFalse(QuestTogether.pendingQuestLogTaskDrain)
 end)
 
+QuestTogether:RegisterTest("quest log queued tasks defer while world map is visible and resume after it closes", function()
+	local ranTask = false
+	local scheduledCallbacks = {}
+	local worldMapVisible = true
+
+	QuestTogether.onQuestLogUpdate = {}
+	QuestTogether.pendingQuestLogTaskDrain = nil
+	QuestTogether.questLogTaskMapVisibilityRetryPending = nil
+	QuestTogether:QueueQuestLogTask(function()
+		ranTask = true
+	end)
+
+	QuestTogether.API = CreateApiWithOverrides({
+		InCombatLockdown = function()
+			return false
+		end,
+		IsWorldMapVisible = function()
+			return worldMapVisible
+		end,
+		Delay = function(seconds, callback)
+			scheduledCallbacks[#scheduledCallbacks + 1] = {
+				seconds = seconds,
+				callback = callback,
+			}
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function()
+		return false
+	end, function()
+		QuestTogether:QUEST_LOG_UPDATE()
+	end)
+
+	AssertFalse(ranTask)
+	AssertTrue(QuestTogether.pendingQuestLogTaskDrain)
+	AssertEquals(#QuestTogether.onQuestLogUpdate, 1)
+	AssertEquals(#scheduledCallbacks, 1)
+	AssertEquals(scheduledCallbacks[1].seconds, 0.2)
+
+	worldMapVisible = false
+	scheduledCallbacks[1].callback()
+
+	AssertTrue(ranTask)
+	AssertFalse(QuestTogether.pendingQuestLogTaskDrain)
+	AssertEquals(#QuestTogether.onQuestLogUpdate, 0)
+	AssertFalse(QuestTogether.questLogTaskMapVisibilityRetryPending)
+end)
+
 QuestTogether:RegisterTest("quest status uses ready to turn in announcement event", function()
 	QuestTogether.API = CreateApiWithOverrides({
 		IsQuestFlaggedCompleted = function()
