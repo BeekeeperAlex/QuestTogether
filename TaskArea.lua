@@ -91,6 +91,31 @@ local function BuildTaskAreaCandidateQuestIds(addon, questInfoByQuestId)
 	return candidateQuestIds
 end
 
+local function BuildActiveTaskAreaSnapshot(taskAreaState, taskType)
+	local activeByQuestId = {}
+	if type(taskAreaState) ~= "table" then
+		return activeByQuestId
+	end
+
+	local resolvedByQuestID = taskAreaState.resolvedByQuestID or {}
+	local resolutionOrder = taskAreaState.resolutionOrder or {}
+	for index = 1, #resolutionOrder do
+		local questId = resolutionOrder[index]
+		local resolution = resolvedByQuestID[questId]
+		if type(resolution) == "table" then
+			if taskType == "bonus" then
+				if resolution.includeBonus then
+					activeByQuestId[questId] = resolution.title
+				end
+			elseif resolution.includeWorld then
+				activeByQuestId[questId] = resolution.title
+			end
+		end
+	end
+
+	return activeByQuestId
+end
+
 local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId)
 	local mapFlags = questInfo and (questInfo.isOnMap == true or questInfo.hasLocalPOI == true) and true or false
 	local explicitTask = questInfo and questInfo.isTask == true or false
@@ -191,35 +216,21 @@ function QuestTogether:RebuildTaskAreaResolverStore()
 	taskAreaState.resolvedByQuestID = resolvedByQuestID
 	taskAreaState.resolutionOrder = resolutionOrder
 	taskAreaState.generation = (taskAreaState.generation or 0) + 1
-	if self.SyncLegacyRuntimeStateAliases then
-		self:SyncLegacyRuntimeStateAliases()
-	end
-
 	return taskAreaState
 end
 
 function QuestTogether:GetTaskAreaSnapshot(taskType)
-	local activeByQuestId = {}
 	local taskAreaState = self.GetTaskAreaSubsystemStateStore and self:GetTaskAreaSubsystemStateStore() or nil
 	if type(taskAreaState) ~= "table" then
-		return activeByQuestId
+		return {}
 	end
 
-	self:RebuildTaskAreaResolverStore()
-	local resolvedByQuestID = taskAreaState.resolvedByQuestID or {}
-	local resolutionOrder = taskAreaState.resolutionOrder or {}
-
-	for index = 1, #resolutionOrder do
-		local questId = resolutionOrder[index]
-		local resolution = resolvedByQuestID[questId]
-		if type(resolution) == "table" then
-			if taskType == "bonus" then
-				if resolution.includeBonus then
-					activeByQuestId[questId] = resolution.title
-				end
-			elseif resolution.includeWorld then
-				activeByQuestId[questId] = resolution.title
-			end
+	local sourceState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore(taskType) or {}
+	local activeByQuestId = {}
+	for questId, questTitle in pairs(sourceState) do
+		local normalizedQuestId = NormalizeQuestId(self, questId)
+		if normalizedQuestId then
+			activeByQuestId[normalizedQuestId] = questTitle
 		end
 	end
 
@@ -237,7 +248,6 @@ end
 function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 	local configByType = {
 		world = {
-			snapshotMethod = "GetActiveWorldQuestAreaSnapshot",
 			enterEvent = "WORLD_QUEST_ENTERED",
 			leftEvent = "WORLD_QUEST_LEFT",
 			enterPrefix = "World Quest Entered: ",
@@ -245,7 +255,6 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 			debugLabel = "World quest",
 		},
 		bonus = {
-			snapshotMethod = "GetActiveBonusObjectiveAreaSnapshot",
 			enterEvent = "BONUS_OBJECTIVE_ENTERED",
 			leftEvent = "BONUS_OBJECTIVE_LEFT",
 			enterPrefix = "Bonus Objective Entered: ",
@@ -255,12 +264,13 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 	}
 
 	local config = configByType[taskType]
-	if not config or type(self[config.snapshotMethod]) ~= "function" then
+	if not config then
 		return
 	end
 
+	local taskAreaState = self.GetTaskAreaSubsystemStateStore and self:GetTaskAreaSubsystemStateStore() or nil
 	local previousStateRaw = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore(taskType) or {}
-	local currentStateRaw = self[config.snapshotMethod](self) or {}
+	local currentStateRaw = BuildActiveTaskAreaSnapshot(taskAreaState, taskType)
 	local previousState = {}
 	local currentState = {}
 
@@ -275,6 +285,14 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 		local normalizedQuestId = NormalizeQuestId(self, questId)
 		if normalizedQuestId then
 			currentState[normalizedQuestId] = questTitle
+		end
+	end
+
+	if taskAreaState and self.GetTaskAreaStateStore then
+		local stateStore = self:GetTaskAreaStateStore(taskType)
+		wipe(stateStore)
+		for questId, questTitle in pairs(currentState) do
+			stateStore[questId] = questTitle
 		end
 	end
 
@@ -316,13 +334,6 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 		end
 	end
 
-	if self.GetTaskAreaStateStore then
-		local stateStore = self:GetTaskAreaStateStore(taskType)
-		wipe(stateStore)
-		for questId, questTitle in pairs(currentState) do
-			stateStore[questId] = questTitle
-		end
-	end
 end
 
 function QuestTogether:RefreshWorldQuestAreaState(shouldAnnounce)
@@ -334,6 +345,10 @@ function QuestTogether:RefreshBonusObjectiveAreaState(shouldAnnounce)
 end
 
 function QuestTogether:ScheduleTaskAreaRefresh(shouldAnnounce, delaySeconds)
+	if delaySeconds ~= nil and delaySeconds <= 0 then
+		delaySeconds = nil
+	end
+
 	if self.ScheduleTaskAreaRefreshWork then
 		self:ScheduleTaskAreaRefreshWork(shouldAnnounce, delaySeconds, "ScheduleTaskAreaRefresh")
 		return
@@ -345,27 +360,18 @@ end
 function QuestTogether:RefreshTaskAreaStates(shouldAnnounce)
 	if self.IsWorkBlocked and self:IsWorkBlocked("task_area_refresh") then
 		if shouldAnnounce then
-			if self.SetRuntimeFlag then
-				self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
-			else
-				self.pendingScheduledTaskAreaRefreshShouldAnnounce = true
-			end
+			self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
 		end
 		self:Debugf("quest", "Deferring task area refresh through runtime gate announce=%s", SafeText(shouldAnnounce, "false"))
-		self:ScheduleTaskAreaRefresh(shouldAnnounce, 0.2)
+		self:ScheduleTaskAreaRefresh(shouldAnnounce)
 		return false
 	end
 
-	local pendingAnnounce = self.GetRuntimeFlag
-		and self:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
-		or self.pendingScheduledTaskAreaRefreshShouldAnnounce
+	local pendingAnnounce = self:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
 	local resolvedShouldAnnounce = shouldAnnounce or (pendingAnnounce and true or false)
-	if self.SetRuntimeFlag then
-		self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
-	else
-		self.pendingScheduledTaskAreaRefreshShouldAnnounce = false
-	end
+	self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
 
+	self:RebuildTaskAreaResolverStore()
 	self:RefreshWorldQuestAreaState(resolvedShouldAnnounce)
 	self:RefreshBonusObjectiveAreaState(resolvedShouldAnnounce)
 	return true

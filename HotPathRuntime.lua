@@ -7,9 +7,7 @@ QuestTogether.runtimeRestrictionTypes = QuestTogether.runtimeRestrictionTypes or
 	pvp = true,
 }
 
-if QuestTogether.GetDeferredWorkStateStore then
-	QuestTogether.deferredWorkState = QuestTogether:GetDeferredWorkStateStore()
-else
+if not QuestTogether.GetDeferredWorkStateStore then
 	QuestTogether.deferredWorkState = QuestTogether.deferredWorkState or {
 		generations = {},
 		entries = {},
@@ -18,7 +16,7 @@ end
 
 QuestTogether.runtimeWorkDelayByClass = QuestTogether.runtimeWorkDelayByClass or {
 	quest_log_drain = 0,
-	task_area_refresh = 0,
+	task_area_refresh = 0.1,
 	quest_snapshot_refresh = 1,
 	nameplate_quest_refresh = 0,
 	nameplate_refresh = 0,
@@ -109,7 +107,7 @@ function QuestTogether:IsWorkBlocked(workClass)
 		if self:IsMapTooltipSensitiveStateActive() then
 			return true
 		end
-		return self:IsRuntimeRestricted()
+		return false
 	end
 
 	if workClass == "quest_log_drain" or workClass == "task_area_refresh" or workClass == "quest_snapshot_refresh" then
@@ -131,8 +129,7 @@ function QuestTogether:ScheduleDeferredWork(workClass, key, callback, delaySecon
 		return false
 	end
 
-	local state = self.GetDeferredWorkStateStore and self:GetDeferredWorkStateStore() or self.deferredWorkState
-	self.deferredWorkState = state
+	local state = self:GetDeferredWorkStateStore()
 	local workKey = BuildDeferredWorkKey(workClass, key)
 	local generation = (state.generations[workKey] or 0) + 1
 	state.generations[workKey] = generation
@@ -196,8 +193,7 @@ function QuestTogether:RunOrDeferWork(workClass, key, callback, delaySeconds, re
 end
 
 function QuestTogether:FlushDeferredWork(reason)
-	local state = self.GetDeferredWorkStateStore and self:GetDeferredWorkStateStore() or self.deferredWorkState
-	self.deferredWorkState = state
+	local state = self:GetDeferredWorkStateStore()
 	if not state or self:IsWorkBlocked("quest_log_drain") then
 		return false
 	end
@@ -242,22 +238,12 @@ end
 
 function QuestTogether:ScheduleTaskAreaRefreshWork(shouldAnnounce, delaySeconds, reason)
 	if shouldAnnounce then
-		if self.SetRuntimeFlag then
-			self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
-		else
-			self.pendingScheduledTaskAreaRefreshShouldAnnounce = true
-		end
+		self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
 	end
 
 	return self:ScheduleDeferredWork("task_area_refresh", "task_area_refresh", function()
-		local announce = self.GetRuntimeFlag
-			and (self:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false) and true or false)
-			or (self.pendingScheduledTaskAreaRefreshShouldAnnounce and true or false)
-		if self.SetRuntimeFlag then
-			self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
-		else
-			self.pendingScheduledTaskAreaRefreshShouldAnnounce = false
-		end
+		local announce = self:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false) and true or false
+		self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
 		if self.RefreshTaskAreaStates then
 			self:RefreshTaskAreaStates(announce)
 		end
@@ -266,11 +252,7 @@ end
 
 function QuestTogether:ScheduleQuestStateRefreshWork(reason, delaySeconds)
 	return self:ScheduleDeferredWork("quest_snapshot_refresh", "quest_snapshot_refresh", function()
-		if self.SetRuntimeFlag then
-			self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-		else
-			self.pendingDeferredNameplateQuestStateRefresh = false
-		end
+		self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
 		if self.RebuildQuestSnapshotStore then
 			self:RebuildQuestSnapshotStore()
 		end

@@ -252,8 +252,8 @@ function QuestTogether:ClearTrackedQuestState(questId)
 	end
 
 	local tracker = self:GetPlayerTracker()
-	local worldState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("world") or self.worldQuestAreaStateByQuestID
-	local bonusState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("bonus") or self.bonusObjectiveAreaStateByQuestID
+	local worldState = self:GetTaskAreaStateStore("world")
+	local bonusState = self:GetTaskAreaStateStore("bonus")
 	worldState[questId] = nil
 	bonusState[questId] = nil
 	tracker[questId] = nil
@@ -519,7 +519,10 @@ function QuestTogether:UNIT_QUEST_LOG_CHANGED(_, unit)
 						end
 					end
 
-					local currentIsComplete = self.API.IsQuestComplete and self.API.IsQuestComplete(questId) or false
+					local statusState = self.GetTrackedQuestStatusState
+						and self:GetTrackedQuestStatusState(questId, true)
+						or nil
+					local currentIsComplete = statusState and statusState.isComplete == true or false
 					local completionChanged = questData.isComplete ~= currentIsComplete
 					if completionChanged then
 						questData.isComplete = currentIsComplete
@@ -532,9 +535,7 @@ function QuestTogether:UNIT_QUEST_LOG_CHANGED(_, unit)
 						)
 					end
 
-					local currentReadyForTurnIn = self.API.IsQuestReadyForTurnIn
-						and self.API.IsQuestReadyForTurnIn(questId)
-						or false
+					local currentReadyForTurnIn = statusState and statusState.isReadyForTurnIn == true or false
 					local readyForTurnInChanged = questData.isReadyForTurnIn ~= currentReadyForTurnIn
 					if readyForTurnInChanged then
 						questData.isReadyForTurnIn = currentReadyForTurnIn

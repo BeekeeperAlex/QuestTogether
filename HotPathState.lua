@@ -4,6 +4,37 @@ local function NewWeakKeyTable()
 	return setmetatable({}, { __mode = "k" })
 end
 
+local function EnsureWeakKeyTable(value)
+	if type(value) == "table" then
+		return value
+	end
+	return NewWeakKeyTable()
+end
+
+local function BindRuntimeReferenceAliases(self, state)
+	self.worldQuestAreaStateByQuestID = state.taskArea.worldByQuestID
+	self.bonusObjectiveAreaStateByQuestID = state.taskArea.bonusByQuestID
+	self.questSnapshotByQuestID = state.questSnapshot.byQuestID
+	self.questSnapshotOrder = state.questSnapshot.order
+
+	self.nameplateQuestTitleCache = state.nameplate.titleCache
+	self.nameplateQuestStateByGuid = state.nameplate.questStateByGuid
+	self.nameplateQuestStateByUnitToken = state.nameplate.questStateByUnitToken
+	self.nameplateQuestGuidByUnitToken = state.nameplate.questGuidByUnitToken
+	self.nameplateIconByUnitFrame = state.nameplate.iconByUnitFrame
+	self.nameplateHealthOverlayByUnitFrame = state.nameplate.healthOverlayByUnitFrame
+	self.nameplateBubbleByUnitFrame = state.nameplate.bubbleByUnitFrame
+	self.nameplateBubbleStateByFrame = state.nameplate.bubbleStateByFrame
+	self.nameplateRefreshPendingByUnitToken = state.nameplate.refreshPendingByUnitToken
+	self.nameplateRefreshGenerationByUnitToken = state.nameplate.refreshGenerationByUnitToken
+	self.nameplateHealthTintRefreshPendingByUnitToken = state.nameplate.healthTintRefreshPendingByUnitToken
+
+	self.personalBubbleSliderHandlesByFrame = state.personalBubble.sliderHandlesByFrame
+	self.personalBubbleDialogPositionByFrame = state.personalBubble.dialogPositionByFrame
+
+	self.deferredWorkState = state.runtime.deferredWorkState
+end
+
 function QuestTogether:EnsureRuntimeStateStore()
 	local state = self.runtimeStateStore
 	if type(state) ~= "table" then
@@ -15,10 +46,14 @@ function QuestTogether:EnsureRuntimeStateStore()
 		state.taskArea = {}
 	end
 	if type(state.taskArea.worldByQuestID) ~= "table" then
-		state.taskArea.worldByQuestID = {}
+		state.taskArea.worldByQuestID = type(self.worldQuestAreaStateByQuestID) == "table"
+			and self.worldQuestAreaStateByQuestID
+			or {}
 	end
 	if type(state.taskArea.bonusByQuestID) ~= "table" then
-		state.taskArea.bonusByQuestID = {}
+		state.taskArea.bonusByQuestID = type(self.bonusObjectiveAreaStateByQuestID) == "table"
+			and self.bonusObjectiveAreaStateByQuestID
+			or {}
 	end
 	if type(state.taskArea.resolvedByQuestID) ~= "table" then
 		state.taskArea.resolvedByQuestID = {}
@@ -37,10 +72,14 @@ function QuestTogether:EnsureRuntimeStateStore()
 		state.questSnapshot = {}
 	end
 	if type(state.questSnapshot.byQuestID) ~= "table" then
-		state.questSnapshot.byQuestID = {}
+		state.questSnapshot.byQuestID = type(self.questSnapshotByQuestID) == "table"
+			and self.questSnapshotByQuestID
+			or {}
 	end
 	if type(state.questSnapshot.order) ~= "table" then
-		state.questSnapshot.order = {}
+		state.questSnapshot.order = type(self.questSnapshotOrder) == "table"
+			and self.questSnapshotOrder
+			or {}
 	end
 	if type(state.questSnapshot.generation) ~= "number" then
 		state.questSnapshot.generation = 0
@@ -50,47 +89,62 @@ function QuestTogether:EnsureRuntimeStateStore()
 		state.nameplate = {}
 	end
 	if type(state.nameplate.questStateByGuid) ~= "table" then
-		state.nameplate.questStateByGuid = {}
+		state.nameplate.questStateByGuid = type(self.nameplateQuestStateByGuid) == "table"
+			and self.nameplateQuestStateByGuid
+			or {}
 	end
 	if type(state.nameplate.questStateByUnitToken) ~= "table" then
-		state.nameplate.questStateByUnitToken = {}
+		state.nameplate.questStateByUnitToken = type(self.nameplateQuestStateByUnitToken) == "table"
+			and self.nameplateQuestStateByUnitToken
+			or {}
 	end
 	if type(state.nameplate.questGuidByUnitToken) ~= "table" then
-		state.nameplate.questGuidByUnitToken = {}
+		state.nameplate.questGuidByUnitToken = type(self.nameplateQuestGuidByUnitToken) == "table"
+			and self.nameplateQuestGuidByUnitToken
+			or {}
 	end
 	if type(state.nameplate.titleCache) ~= "table" then
-		state.nameplate.titleCache = {}
+		state.nameplate.titleCache = type(self.nameplateQuestTitleCache) == "table"
+			and self.nameplateQuestTitleCache
+			or {}
 	end
 	if type(state.nameplate.refreshGenerationByUnitToken) ~= "table" then
-		state.nameplate.refreshGenerationByUnitToken = {}
+		state.nameplate.refreshGenerationByUnitToken = type(self.nameplateRefreshGenerationByUnitToken) == "table"
+			and self.nameplateRefreshGenerationByUnitToken
+			or {}
 	end
 	if type(state.nameplate.refreshPendingByUnitToken) ~= "table" then
-		state.nameplate.refreshPendingByUnitToken = {}
+		state.nameplate.refreshPendingByUnitToken = type(self.nameplateRefreshPendingByUnitToken) == "table"
+			and self.nameplateRefreshPendingByUnitToken
+			or {}
 	end
 	if type(state.nameplate.healthTintRefreshPendingByUnitToken) ~= "table" then
-		state.nameplate.healthTintRefreshPendingByUnitToken = {}
+		state.nameplate.healthTintRefreshPendingByUnitToken =
+			type(self.nameplateHealthTintRefreshPendingByUnitToken) == "table"
+				and self.nameplateHealthTintRefreshPendingByUnitToken
+				or {}
 	end
 	if type(state.nameplate.iconByUnitFrame) ~= "table" then
-		state.nameplate.iconByUnitFrame = NewWeakKeyTable()
+		state.nameplate.iconByUnitFrame = EnsureWeakKeyTable(self.nameplateIconByUnitFrame)
 	end
 	if type(state.nameplate.healthOverlayByUnitFrame) ~= "table" then
-		state.nameplate.healthOverlayByUnitFrame = NewWeakKeyTable()
+		state.nameplate.healthOverlayByUnitFrame = EnsureWeakKeyTable(self.nameplateHealthOverlayByUnitFrame)
 	end
 	if type(state.nameplate.bubbleByUnitFrame) ~= "table" then
-		state.nameplate.bubbleByUnitFrame = NewWeakKeyTable()
+		state.nameplate.bubbleByUnitFrame = EnsureWeakKeyTable(self.nameplateBubbleByUnitFrame)
 	end
 	if type(state.nameplate.bubbleStateByFrame) ~= "table" then
-		state.nameplate.bubbleStateByFrame = NewWeakKeyTable()
+		state.nameplate.bubbleStateByFrame = EnsureWeakKeyTable(self.nameplateBubbleStateByFrame)
 	end
 
 	if type(state.personalBubble) ~= "table" then
 		state.personalBubble = {}
 	end
 	if type(state.personalBubble.sliderHandlesByFrame) ~= "table" then
-		state.personalBubble.sliderHandlesByFrame = NewWeakKeyTable()
+		state.personalBubble.sliderHandlesByFrame = EnsureWeakKeyTable(self.personalBubbleSliderHandlesByFrame)
 	end
 	if type(state.personalBubble.dialogPositionByFrame) ~= "table" then
-		state.personalBubble.dialogPositionByFrame = NewWeakKeyTable()
+		state.personalBubble.dialogPositionByFrame = EnsureWeakKeyTable(self.personalBubbleDialogPositionByFrame)
 	end
 
 	if type(state.runtime) ~= "table" then
@@ -109,7 +163,7 @@ function QuestTogether:EnsureRuntimeStateStore()
 		state.runtime.nameplateFullRefreshGeneration = 0
 	end
 	if type(state.runtime.deferredWorkState) ~= "table" then
-		state.runtime.deferredWorkState = {}
+		state.runtime.deferredWorkState = type(self.deferredWorkState) == "table" and self.deferredWorkState or {}
 	end
 	if type(state.runtime.deferredWorkState.generations) ~= "table" then
 		state.runtime.deferredWorkState.generations = {}
@@ -121,6 +175,7 @@ function QuestTogether:EnsureRuntimeStateStore()
 		state.runtime.pendingWaypointIntent = nil
 	end
 
+	BindRuntimeReferenceAliases(self, state)
 	return state
 end
 
@@ -174,22 +229,20 @@ end
 
 function QuestTogether:ResetQuestSnapshotStateStore()
 	local state = self:GetQuestSnapshotStateStore()
-	state.byQuestID = {}
-	state.order = {}
+	wipe(state.byQuestID)
+	wipe(state.order)
 	state.generation = 0
-	self:SyncLegacyRuntimeStateAliases()
 	return state
 end
 
 function QuestTogether:ResetTaskAreaStateStore()
 	local state = self:EnsureRuntimeStateStore()
-	state.taskArea.worldByQuestID = {}
-	state.taskArea.bonusByQuestID = {}
-	state.taskArea.resolvedByQuestID = {}
-	state.taskArea.resolutionOrder = {}
+	wipe(state.taskArea.worldByQuestID)
+	wipe(state.taskArea.bonusByQuestID)
+	wipe(state.taskArea.resolvedByQuestID)
+	wipe(state.taskArea.resolutionOrder)
 	state.taskArea.generation = 0
 	state.taskArea.pendingAnnounce = false
-	self:SyncLegacyRuntimeStateAliases()
 	return state.taskArea
 end
 
@@ -199,18 +252,18 @@ end
 
 function QuestTogether:ResetNameplateStateStore()
 	local state = self:EnsureRuntimeStateStore()
-	state.nameplate.questStateByGuid = {}
-	state.nameplate.questStateByUnitToken = {}
-	state.nameplate.questGuidByUnitToken = {}
-	state.nameplate.titleCache = {}
-	state.nameplate.refreshGenerationByUnitToken = {}
-	state.nameplate.refreshPendingByUnitToken = {}
-	state.nameplate.healthTintRefreshPendingByUnitToken = {}
+	wipe(state.nameplate.questStateByGuid)
+	wipe(state.nameplate.questStateByUnitToken)
+	wipe(state.nameplate.questGuidByUnitToken)
+	wipe(state.nameplate.titleCache)
+	wipe(state.nameplate.refreshGenerationByUnitToken)
+	wipe(state.nameplate.refreshPendingByUnitToken)
+	wipe(state.nameplate.healthTintRefreshPendingByUnitToken)
 	state.nameplate.iconByUnitFrame = NewWeakKeyTable()
 	state.nameplate.healthOverlayByUnitFrame = NewWeakKeyTable()
 	state.nameplate.bubbleByUnitFrame = NewWeakKeyTable()
 	state.nameplate.bubbleStateByFrame = NewWeakKeyTable()
-	self:SyncLegacyRuntimeStateAliases()
+	BindRuntimeReferenceAliases(self, state)
 	return state.nameplate
 end
 
@@ -238,7 +291,6 @@ end
 function QuestTogether:SetRuntimeFlag(key, value)
 	local runtimeState = self:GetRuntimeWorkStateStore()
 	runtimeState[key] = value
-	self[key] = value
 	return value
 end
 
@@ -249,7 +301,6 @@ function QuestTogether:SetPendingWaypointIntent(intent)
 	else
 		runtimeState.pendingWaypointIntent = nil
 	end
-	self.pendingWaypointIntent = runtimeState.pendingWaypointIntent
 	return runtimeState.pendingWaypointIntent
 end
 
@@ -264,40 +315,8 @@ function QuestTogether:ResetRuntimeWorkStateStore()
 		generations = {},
 		entries = {},
 	}
-	self:SyncLegacyRuntimeStateAliases()
+	BindRuntimeReferenceAliases(self, self:EnsureRuntimeStateStore())
 	return runtimeState
 end
 
-function QuestTogether:SyncLegacyRuntimeStateAliases()
-	local state = self:EnsureRuntimeStateStore()
-
-	self.worldQuestAreaStateByQuestID = state.taskArea.worldByQuestID
-	self.bonusObjectiveAreaStateByQuestID = state.taskArea.bonusByQuestID
-	self.questSnapshotByQuestID = state.questSnapshot.byQuestID
-	self.questSnapshotOrder = state.questSnapshot.order
-
-	self.nameplateQuestTitleCache = state.nameplate.titleCache
-	self.nameplateQuestStateByGuid = state.nameplate.questStateByGuid
-	self.nameplateQuestStateByUnitToken = state.nameplate.questStateByUnitToken
-	self.nameplateQuestGuidByUnitToken = state.nameplate.questGuidByUnitToken
-	self.nameplateIconByUnitFrame = state.nameplate.iconByUnitFrame
-	self.nameplateHealthOverlayByUnitFrame = state.nameplate.healthOverlayByUnitFrame
-	self.nameplateBubbleByUnitFrame = state.nameplate.bubbleByUnitFrame
-	self.nameplateBubbleStateByFrame = state.nameplate.bubbleStateByFrame
-	self.nameplateRefreshPendingByUnitToken = state.nameplate.refreshPendingByUnitToken
-	self.nameplateRefreshGenerationByUnitToken = state.nameplate.refreshGenerationByUnitToken
-	self.nameplateHealthTintRefreshPendingByUnitToken = state.nameplate.healthTintRefreshPendingByUnitToken
-
-	self.personalBubbleSliderHandlesByFrame = state.personalBubble.sliderHandlesByFrame
-	self.personalBubbleDialogPositionByFrame = state.personalBubble.dialogPositionByFrame
-
-	self.pendingScheduledTaskAreaRefreshShouldAnnounce = state.runtime.pendingScheduledTaskAreaRefreshShouldAnnounce
-	self.pendingDeferredNameplateQuestStateRefresh = state.runtime.pendingDeferredNameplateQuestStateRefresh
-	self.deferredNameplateQuestStateRefreshGeneration = state.runtime.deferredNameplateQuestStateRefreshGeneration
-	self.nameplateFullRefreshGeneration = state.runtime.nameplateFullRefreshGeneration
-	self.deferredWorkState = state.runtime.deferredWorkState
-	self.pendingWaypointIntent = state.runtime.pendingWaypointIntent
-end
-
 QuestTogether:EnsureRuntimeStateStore()
-QuestTogether:SyncLegacyRuntimeStateAliases()

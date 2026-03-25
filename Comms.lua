@@ -1042,7 +1042,7 @@ function QuestTogether:BuildQuestCompareEntries()
 				questId = SafeAddonString(self, questInfo.questID, ""),
 				questTitle = self:GetQuestTitle(questInfo.questID, questInfo),
 				isComplete = questInfo.isComplete and true or false,
-				isPushable = self.API.IsPushableQuest and self.API.IsPushableQuest(questInfo.questID) and true or false,
+				isPushable = self:GetQuestShareableStatusLabel(questInfo.questID) == "Yes",
 			}
 		end
 	end

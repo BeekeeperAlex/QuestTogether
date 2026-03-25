@@ -70,8 +70,16 @@
 - Restricted snapshot auto-rebuilds so blocked map/restriction windows return stale-or-empty snapshot state instead of probing live Blizzard quest APIs.
 - Removed the remaining ordinary-runtime `C_QuestLog` metadata fallbacks. Snapshot consumers now no longer fall through to live `C_QuestLog` tag/theme/title/index/info helpers, and the snapshot builder itself no longer relies on `C_QuestLog.IsWorldQuest()` / `IsQuestTask()` classification probes.
 - Added `TaskArea.lua` as a first-class subsystem. Task-area truth now flows through one resolver/coordinator that consumes addon-owned quest snapshot fields only and produces addon-owned resolver state plus active world/bonus snapshots.
+- Cleaned up the first post-refactor architectural leftovers:
+  - task-area reads are now store-backed and side-effect free; resolver rebuilds happen in refresh paths instead of snapshot accessors
+  - nameplate quest title cache now reads only from the quest snapshot store and no longer owns a backup quest-log scan path
+  - removed the dead quest tag/theme announcement metadata layer and standardized world/bonus/quest announcement icon policy to static cache-safe assets
+  - centralized tracker/snapshot-first quest status resolution and narrowed live quest-status fallbacks behind one helper instead of probing ad hoc from multiple sites
+- Removed the explicit legacy runtime alias-sync layer from `HotPathState.lua`; runtime store tables now retain identity across resets and the remaining compatibility references stay attached without a mirror pass.
+- Added a small shared debounce to `task_area_refresh` so noisy map/blob/quest events coalesce through the scheduler instead of rebuilding immediately on every event.
+- Tightened quest-compare/shareable status reads so they go through the shared quest-status/shareability policy instead of calling live APIs directly from comms code.
 
 ## Open Risks
 - Static validation is clean, and one live `/qt test` pass already exposed and validated follow-up fixes, but another in-game `/qt test` and combat/world-map regression pass is still needed after the latest patches.
 - Some legacy top-level aliases still exist as compatibility surfaces, even though the store now owns the underlying runtime data.
-- The remaining live Blizzard quest dependencies are now concentrated in snapshot-build metadata enrichment (`C_QuestLog.GetQuestTagInfo`, `C_QuestLog.GetQuestDetailsTheme`) plus narrow quest identity/title recovery (`C_QuestLog.GetQuestIDForLogIndex`, `C_QuestLog.GetTitleForQuestID`, `C_TaskQuest.GetQuestInfoByQuestID`). Task-area resolver dependencies on `GetTasksTable`, `GetTaskInfo`, and `C_TaskQuest.IsActive` were removed after live validation showed they could still contaminate Blizzard's world-map paths.
+- The remaining live Blizzard quest dependencies are now mostly status-oriented helpers (`C_QuestLog.ReadyForTurnIn`, `IsComplete`, `IsOnQuest`, `IsPushableQuest`, `IsQuestFlaggedCompleted`) and sanitized row reads from `C_QuestLog.GetInfo`. The old task-area helpers and quest tag/theme metadata helpers are no longer part of the runtime path.

@@ -165,9 +165,7 @@ end
 if QuestTogether.EnsureRuntimeStateStore then
 	QuestTogether:EnsureRuntimeStateStore()
 end
-if QuestTogether.SyncLegacyRuntimeStateAliases then
-	QuestTogether:SyncLegacyRuntimeStateAliases()
-else
+if not QuestTogether.GetNameplateStateStore then
 	QuestTogether.nameplateQuestTitleCache = QuestTogether.nameplateQuestTitleCache or {}
 	QuestTogether.nameplateQuestStateByGuid = QuestTogether.nameplateQuestStateByGuid or {}
 	QuestTogether.nameplateQuestStateByUnitToken = QuestTogether.nameplateQuestStateByUnitToken or {}
@@ -1474,26 +1472,15 @@ function QuestTogether:RebuildNameplateQuestTitleCache()
 
 	local snapshotByQuestID = self.GetQuestSnapshotByQuestID and self:GetQuestSnapshotByQuestID() or nil
 	local snapshotOrder = self.GetQuestSnapshotOrder and self:GetQuestSnapshotOrder() or nil
-	if type(snapshotOrder) == "table" and #snapshotOrder > 0 then
-		for index = 1, #snapshotOrder do
-			local questID = snapshotOrder[index]
-			local questDetails = snapshotByQuestID and snapshotByQuestID[questID] or nil
-			if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
-				self.nameplateQuestTitleCache[questDetails.title] = true
-			end
-		end
+	if type(snapshotOrder) ~= "table" then
 		return
 	end
 
-	-- Keep a combat-safe quest-title cache refresh path like Plater's quest-log
-	-- rebuild. This is a worker/cache path, not the presenter hot path.
-	if self.API and self.API.GetNumQuestLogEntries and self.API.GetQuestLogInfo then
-		local totalEntries = SafeUiNumber(self.API.GetNumQuestLogEntries(), 0) or 0
-		for entryIndex = 1, totalEntries do
-			local questDetails = self.API.GetQuestLogInfo(entryIndex)
-			if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
-				self.nameplateQuestTitleCache[questDetails.title] = true
-			end
+	for index = 1, #snapshotOrder do
+		local questID = snapshotOrder[index]
+		local questDetails = snapshotByQuestID and snapshotByQuestID[questID] or nil
+		if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
+			self.nameplateQuestTitleCache[questDetails.title] = true
 		end
 	end
 end
@@ -3371,11 +3358,7 @@ function QuestTogether:RefreshVisibleNameplates(reason)
 end
 
 function QuestTogether:RefreshNameplatesForQuestStateChange(reason)
-	if self.SetRuntimeFlag then
-		self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-	else
-		self.pendingDeferredNameplateQuestStateRefresh = false
-	end
+	self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
 	self:RebuildNameplateQuestTitleCache()
 	self:ClearNameplateQuestDetectionCache()
 	self:ClearNameplateResolvedQuestState()
@@ -3384,21 +3367,13 @@ function QuestTogether:RefreshNameplatesForQuestStateChange(reason)
 end
 
 function QuestTogether:ScheduleDeferredNameplateQuestStateRefresh(reason, delaySeconds)
-	if self.SetRuntimeFlag then
-		self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", true)
-	else
-		self.pendingDeferredNameplateQuestStateRefresh = true
-	end
+	self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", true)
 	if self.ScheduleQuestStateRefreshWork then
 		self:ScheduleQuestStateRefreshWork(reason, delaySeconds or PLATER_QUEST_STATE_REFRESH_DELAY_SECONDS)
 		return
 	end
 
-	if self.SetRuntimeFlag then
-		self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-	else
-		self.pendingDeferredNameplateQuestStateRefresh = false
-	end
+	self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
 	self:RefreshNameplatesForQuestStateChange(reason)
 end
 
@@ -3684,20 +3659,12 @@ function QuestTogether:DisableNameplateAugmentation()
 
 	-- Hide our icon overlays and clear cached quest objective state.
 	self:ClearNameplateQuestDetectionCache()
-	if self.SetRuntimeFlag then
-		self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-		self:SetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
-	else
-		self.pendingDeferredNameplateQuestStateRefresh = false
-		self.deferredNameplateQuestStateRefreshGeneration = 0
-	end
+	self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
+	self:SetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
 	self:ForEachVisibleNamePlate(function(frame)
 		self:HideNameplateIcon(frame)
 	end)
 	if self.ResetNameplateStateStore then
 		self:ResetNameplateStateStore()
-	end
-	if self.SyncLegacyRuntimeStateAliases then
-		self:SyncLegacyRuntimeStateAliases()
 	end
 end

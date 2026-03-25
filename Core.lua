@@ -23,47 +23,6 @@ local raw_string_match = string.match
 local raw_string_find = string.find
 local raw_issecretvalue = type(issecretvalue) == "function" and issecretvalue or nil
 
-local function CanUseQuestLogFallbacks()
-	if not QuestTogether then
-		return true
-	end
-
-	if QuestTogether.IsWorkBlocked and QuestTogether:IsWorkBlocked("quest_snapshot_refresh") then
-		return false
-	end
-
-	return true
-end
-
-local function SanitizeQuestTagInfo(rawTagInfo)
-	if type(rawTagInfo) ~= "table" then
-		return nil
-	end
-
-	local tagInfo = {}
-	local tagID = nil
-	local worldQuestType = nil
-	if QuestTogether and QuestTogether.SafeToNumber then
-		if not (QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawTagInfo.tagID)) then
-			tagID = QuestTogether:SafeToNumber(rawTagInfo.tagID)
-		end
-		if not (QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawTagInfo.worldQuestType)) then
-			worldQuestType = QuestTogether:SafeToNumber(rawTagInfo.worldQuestType)
-		end
-	end
-	if tagID ~= nil then
-		tagInfo.tagID = math.floor(tagID + 0.5)
-	end
-	if worldQuestType ~= nil then
-		tagInfo.worldQuestType = math.floor(worldQuestType + 0.5)
-	end
-	if next(tagInfo) == nil then
-		return nil
-	end
-
-	return tagInfo
-end
-
 local function NormalizeQuestInfoFlagValue(rawValue)
 	if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
 		return nil
@@ -153,37 +112,6 @@ local function GetSnapshotBuilderQuestLogInfo(questLogIndex)
 		and QuestTogether.API.GetQuestLogInfo(numericQuestLogIndex)
 		or nil
 	return questInfo
-end
-
-local function GetLiveQuestTagInfo(questID)
-	if not (C_QuestLog and C_QuestLog.GetQuestTagInfo and CanUseQuestLogFallbacks()) then
-		return nil
-	end
-
-	local ok, rawTagInfo = pcall(C_QuestLog.GetQuestTagInfo, questID)
-	if not ok then
-		return nil
-	end
-
-	return SanitizeQuestTagInfo(rawTagInfo)
-end
-
-local function GetLiveQuestDetailsThemePoiIcon(questID)
-	if not (C_QuestLog and C_QuestLog.GetQuestDetailsTheme and CanUseQuestLogFallbacks()) then
-		return nil
-	end
-
-	local ok, theme = pcall(C_QuestLog.GetQuestDetailsTheme, questID)
-	if not ok or type(theme) ~= "table" then
-		return nil
-	end
-
-	local poiIcon = theme.poiIcon
-	if type(poiIcon) ~= "string" or poiIcon == "" then
-		return nil
-	end
-
-	return poiIcon
 end
 
 local function SafeText(value, fallback)
@@ -2813,9 +2741,6 @@ function QuestTogether:RebuildQuestSnapshotStore()
 	snapshotState.byQuestID = snapshotByQuestID
 	snapshotState.order = snapshotOrder
 	snapshotState.generation = (snapshotState.generation or 0) + 1
-	if self.SyncLegacyRuntimeStateAliases then
-		self:SyncLegacyRuntimeStateAliases()
-	end
 
 	if totalEntries > 0 and #snapshotOrder == 0 and not snapshotState.didLogEmptyBuildDiagnostics then
 		snapshotState.didLogEmptyBuildDiagnostics = true
@@ -2860,57 +2785,6 @@ function QuestTogether:EnsureQuestSnapshotStore()
 	return snapshotState
 end
 
-function QuestTogether:GetQuestTagInfo(questId)
-	if self.EnsureQuestSnapshotStore then
-		self:EnsureQuestSnapshotStore()
-	end
-	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(questId) or nil
-	if snapshot and type(snapshot.tagInfo) == "table" then
-		return snapshot.tagInfo
-	end
-	return nil
-end
-
-function QuestTogether:GetQuestDetailsThemePoiIcon(questId)
-	if self.EnsureQuestSnapshotStore then
-		self:EnsureQuestSnapshotStore()
-	end
-	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(questId) or nil
-	if snapshot and type(snapshot.poiIcon) == "string" and snapshot.poiIcon ~= "" then
-		return snapshot.poiIcon
-	end
-	return nil
-end
-
-function QuestTogether:GetQuestTagAtlas(tagID, worldQuestType)
-	if type(QuestUtils_GetQuestTagAtlas) ~= "function" then
-		return nil
-	end
-
-	-- Atlas resolver can throw for unknown combinations; fail soft to default icons.
-	local ok, atlas = pcall(QuestUtils_GetQuestTagAtlas, tagID, worldQuestType)
-	if not ok or type(atlas) ~= "string" or atlas == "" then
-		return nil
-	end
-
-	return atlas
-end
-
-function QuestTogether:GetWorldQuestAtlasInfo(questId, tagInfo, inProgress)
-	local numericQuestId = self:SafeToNumber(questId)
-	if not numericQuestId or type(tagInfo) ~= "table" or not QuestUtil or not QuestUtil.GetWorldQuestAtlasInfo then
-		return nil
-	end
-
-	-- Atlas resolver can throw for quest states that are mid-refresh.
-	local ok, atlas = pcall(QuestUtil.GetWorldQuestAtlasInfo, numericQuestId, tagInfo, inProgress and true or false)
-	if not ok or type(atlas) ~= "string" or atlas == "" then
-		return nil
-	end
-
-	return atlas
-end
-
 function QuestTogether:GetQuestStateAnnouncementIconInfo(eventType, questId)
 	local texturePath = self.NAMEPLATE_QUEST_ICON_TEXTURE
 	if type(texturePath) ~= "string" or texturePath == "" then
@@ -2921,63 +2795,10 @@ function QuestTogether:GetQuestStateAnnouncementIconInfo(eventType, questId)
 end
 
 function QuestTogether:GetWorldQuestAnnouncementIconInfo(questId)
-	local numericQuestId = self:SafeToNumber(questId)
-	if not numericQuestId then
-		return "worldquest-icon", "atlas"
-	end
-
-	local tagInfo = self:GetQuestTagInfo(numericQuestId)
-	if tagInfo then
-		local atlas = self:GetWorldQuestAtlasInfo(numericQuestId, tagInfo, false)
-		if atlas then
-			return atlas, "atlas"
-		end
-	end
-
-	local poiIcon = self:GetQuestDetailsThemePoiIcon(numericQuestId)
-	if poiIcon then
-		return poiIcon, "atlas"
-	end
-
 	return "worldquest-icon", "atlas"
 end
 
 function QuestTogether:GetBonusObjectiveAnnouncementIconInfo(eventType, questId)
-	local numericQuestId = self:SafeToNumber(questId)
-	if numericQuestId then
-		local tagInfo = self:GetQuestTagInfo(numericQuestId)
-		if tagInfo then
-			local atlas = self:GetQuestTagAtlas(tagInfo.tagID, tagInfo.worldQuestType)
-			if atlas then
-				return atlas, "atlas"
-			end
-		end
-
-		local poiIcon = self:GetQuestDetailsThemePoiIcon(numericQuestId)
-		if poiIcon then
-			return poiIcon, "atlas"
-		end
-	end
-
-	local questStateEventType = eventType
-	if eventType == "BONUS_OBJECTIVE_ENTERED" then
-		questStateEventType = "QUEST_ACCEPTED"
-	elseif
-		eventType == "BONUS_OBJECTIVE_PROGRESS"
-		or eventType == "BONUS_OBJECTIVE_LEFT"
-	then
-		questStateEventType = "QUEST_PROGRESS"
-	elseif eventType == "BONUS_OBJECTIVE_COMPLETED" then
-		questStateEventType = "QUEST_COMPLETED"
-	end
-
-	if numericQuestId then
-		local asset, kind = self:GetQuestStateAnnouncementIconInfo(questStateEventType, numericQuestId)
-		if asset and kind then
-			return asset, kind
-		end
-	end
-
 	return "Bonus-Objective-Star", "atlas"
 end
 
@@ -3156,16 +2977,43 @@ function QuestTogether:GetQuestStatusLabel(questId)
 		return "Unknown"
 	end
 
-	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
-	local trackedQuest = tracker and tracker[numericQuestId] or nil
-	if type(trackedQuest) == "table" then
-		if trackedQuest.isReadyForTurnIn == true then
+	local statusState = self.GetTrackedQuestStatusState and self:GetTrackedQuestStatusState(numericQuestId, true) or nil
+	if type(statusState) == "table" then
+		if statusState.isFlaggedCompleted == true then
+			return "Completed"
+		end
+		if statusState.isReadyForTurnIn == true then
 			return "Ready to Turn In"
 		end
-		if trackedQuest.isComplete == true then
+		if statusState.isComplete == true then
 			return "Objectives Complete"
 		end
-		return "In Progress"
+		if statusState.isTracked == true or statusState.isOnQuest == true then
+			return "In Progress"
+		end
+	end
+
+	return "Not Started"
+end
+
+function QuestTogether:GetTrackedQuestStatusState(questId, allowLiveFallback)
+	local numericQuestId = self:SafeToNumber(questId)
+	if not numericQuestId then
+		return nil
+	end
+
+	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
+	local trackedQuest = tracker and tracker[numericQuestId] or nil
+	local state = {
+		isTracked = trackedQuest ~= nil,
+		isComplete = trackedQuest and trackedQuest.isComplete == true or false,
+		isReadyForTurnIn = trackedQuest and trackedQuest.isReadyForTurnIn == true or false,
+		isFlaggedCompleted = false,
+		isOnQuest = false,
+	}
+
+	if type(trackedQuest) == "table" then
+		state.isOnQuest = true
 	end
 
 	if self.EnsureQuestSnapshotStore then
@@ -3173,29 +3021,37 @@ function QuestTogether:GetQuestStatusLabel(questId)
 	end
 	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(numericQuestId) or nil
 	if type(snapshot) == "table" then
-		if snapshot.isComplete == true then
-			return "Objectives Complete"
+		state.isTracked = true
+		state.isOnQuest = true
+		if state.isComplete ~= true then
+			state.isComplete = snapshot.isComplete == true
 		end
-		return "In Progress"
+	end
+
+	if allowLiveFallback ~= true then
+		return state
+	end
+
+	if self.IsWorkBlocked and self:IsWorkBlocked("quest_snapshot_refresh") then
+		return state
 	end
 
 	if self.API and self.API.IsQuestFlaggedCompleted and self.API.IsQuestFlaggedCompleted(numericQuestId) then
-		return "Completed"
+		state.isFlaggedCompleted = true
 	end
 	if self.API and self.API.IsQuestReadyForTurnIn and self.API.IsQuestReadyForTurnIn(numericQuestId) then
-		return "Ready to Turn In"
+		state.isReadyForTurnIn = true
+	end
+	if not state.isComplete and self.API and self.API.IsQuestComplete and self.API.IsQuestComplete(numericQuestId) then
+		state.isComplete = true
+	end
+	if not state.isOnQuest then
+		local questLogIndex = self.API and self.API.GetQuestLogIndexForQuestID and self.API.GetQuestLogIndexForQuestID(numericQuestId)
+		local isOnQuest = self.API and self.API.IsOnQuest and self.API.IsOnQuest(numericQuestId)
+		state.isOnQuest = (questLogIndex ~= nil) or (isOnQuest and true or false)
 	end
 
-	local questLogIndex = self.API and self.API.GetQuestLogIndexForQuestID and self.API.GetQuestLogIndexForQuestID(numericQuestId)
-	local isOnQuest = self.API and self.API.IsOnQuest and self.API.IsOnQuest(numericQuestId)
-	if questLogIndex or isOnQuest then
-		if self.API and self.API.IsQuestComplete and self.API.IsQuestComplete(numericQuestId) then
-			return "Objectives Complete"
-		end
-		return "In Progress"
-	end
-
-	return "Not Started"
+	return state
 end
 
 function QuestTogether:GetQuestShareableStatusLabel(questId)
@@ -3204,9 +3060,12 @@ function QuestTogether:GetQuestShareableStatusLabel(questId)
 		return "Unknown"
 	end
 
-	local questLogIndex = self.API and self.API.GetQuestLogIndexForQuestID and self.API.GetQuestLogIndexForQuestID(numericQuestId)
-	local isOnQuest = self.API and self.API.IsOnQuest and self.API.IsOnQuest(numericQuestId)
-	if not questLogIndex and not isOnQuest then
+	local statusState = self:GetTrackedQuestStatusState(numericQuestId, true)
+	if type(statusState) ~= "table" or statusState.isOnQuest ~= true then
+		return "Unknown"
+	end
+
+	if self.IsWorkBlocked and self:IsWorkBlocked("quest_snapshot_refresh") then
 		return "Unknown"
 	end
 
@@ -3528,12 +3387,8 @@ function QuestTogether:CreateBlizzardWaypoint(mapID, coordX, coordY)
 		local ranNow = self:RunOrDeferWork("waypoint_mutation", "user_waypoint", function()
 			local pending = self.GetRuntimeWorkStateStore
 				and self:GetRuntimeWorkStateStore().pendingWaypointIntent
-				or self.pendingWaypointIntent
-			if self.SetPendingWaypointIntent then
-				self:SetPendingWaypointIntent(nil)
-			else
-				self.pendingWaypointIntent = nil
-			end
+				or nil
+			self:SetPendingWaypointIntent(nil)
 			if pending then
 				applyWaypoint()
 			end
@@ -4285,14 +4140,11 @@ function QuestTogether:Enable()
 	if self.ResetRuntimeWorkStateStore then
 		self:ResetRuntimeWorkStateStore()
 	end
-	if self.SyncLegacyRuntimeStateAliases then
-		self:SyncLegacyRuntimeStateAliases()
-	end
 	if self.EnsureAnnouncementChannelJoined then
 		self:EnsureAnnouncementChannelJoined()
 	end
-	if self.RefreshWorldQuestAreaState then
-		self:RefreshWorldQuestAreaState(false)
+	if self.RefreshTaskAreaStates then
+		self:RefreshTaskAreaStates(false)
 	end
 
 	if self.EnableNameplateAugmentation then
@@ -4338,9 +4190,6 @@ function QuestTogether:Disable()
 	end
 	if self.ResetRuntimeWorkStateStore then
 		self:ResetRuntimeWorkStateStore()
-	end
-	if self.SyncLegacyRuntimeStateAliases then
-		self:SyncLegacyRuntimeStateAliases()
 	end
 	if self.LeaveAnnouncementChannel then
 		self:LeaveAnnouncementChannel()
@@ -4819,6 +4668,10 @@ function QuestTogether:ScanQuestLog()
 		end
 	end
 
+	if self.RefreshTaskAreaStates then
+		self:RefreshTaskAreaStates(false)
+	end
+
 	-- Area task quests can exist outside normal quest-log rows.
 	-- Add them explicitly so progress announcements can still operate on them.
 	if self.GetActiveWorldQuestAreaSnapshot then
@@ -4840,13 +4693,6 @@ function QuestTogether:ScanQuestLog()
 				end
 			end
 		end
-	end
-
-	if self.RefreshWorldQuestAreaState then
-		self:RefreshWorldQuestAreaState(false)
-	end
-	if self.RefreshBonusObjectiveAreaState then
-		self:RefreshBonusObjectiveAreaState(false)
 	end
 
 	self:Debugf("quest", "Scan complete questsTracked=%d", questsTracked)
@@ -4940,9 +4786,6 @@ function QuestTogether:OnInitialize()
 	self:InitializeDatabase()
 	if self.EnsureRuntimeStateStore then
 		self:EnsureRuntimeStateStore()
-	end
-	if self.SyncLegacyRuntimeStateAliases then
-		self:SyncLegacyRuntimeStateAliases()
 	end
 	if self.InitializePartyState then
 		self:InitializePartyState()

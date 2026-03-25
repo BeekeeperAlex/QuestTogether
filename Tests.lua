@@ -125,12 +125,13 @@ local function WithIsolatedState(testFn)
 	local originalIsLoggingOut = QuestTogether.isLoggingOut
 	local originalQuestLogChatFrameID = QuestTogether.db.profile.questLogChatFrameID
 	local originalPendingScheduledTaskAreaRefreshShouldAnnounce =
-		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce
-	local originalPendingDeferredNameplateQuestStateRefresh = QuestTogether.pendingDeferredNameplateQuestStateRefresh
+		QuestTogether:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
+	local originalPendingDeferredNameplateQuestStateRefresh =
+		QuestTogether:GetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
 	local originalDeferredNameplateQuestStateRefreshGeneration =
-		QuestTogether.deferredNameplateQuestStateRefreshGeneration
+		QuestTogether:GetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
 	local originalDeferredWorkState = QuestTogether.deferredWorkState
-	local originalPendingWaypointIntent = QuestTogether.pendingWaypointIntent
+	local originalPendingWaypointIntent = QuestTogether:GetRuntimeWorkStateStore().pendingWaypointIntent
 
 	if QuestTogether.UnregisterRuntimeEvents then
 		QuestTogether:UnregisterRuntimeEvents()
@@ -159,6 +160,9 @@ local function WithIsolatedState(testFn)
 	if QuestTogether.EnsureRuntimeStateStore then
 		QuestTogether:EnsureRuntimeStateStore()
 	end
+	if QuestTogether.ResetQuestSnapshotStateStore then
+		QuestTogether:ResetQuestSnapshotStateStore()
+	end
 	if QuestTogether.ResetTaskAreaStateStore then
 		QuestTogether:ResetTaskAreaStateStore()
 	end
@@ -167,9 +171,6 @@ local function WithIsolatedState(testFn)
 	end
 	if QuestTogether.ResetRuntimeWorkStateStore then
 		QuestTogether:ResetRuntimeWorkStateStore()
-	end
-	if QuestTogether.SyncLegacyRuntimeStateAliases then
-		QuestTogether:SyncLegacyRuntimeStateAliases()
 	end
 	QuestTogether.nameplateTooltipGuidByUnitToken = nil
 	QuestTogether.nameplateScanTooltip = nil
@@ -219,8 +220,8 @@ local function WithIsolatedState(testFn)
 	end
 	QuestTogether.isEnabled = originalIsEnabled
 	QuestTogether.runtimeStateStore = originalRuntimeStateStore
-	if QuestTogether.SyncLegacyRuntimeStateAliases then
-		QuestTogether:SyncLegacyRuntimeStateAliases()
+	if QuestTogether.EnsureRuntimeStateStore then
+		QuestTogether:EnsureRuntimeStateStore()
 	end
 	QuestTogether.nameplateTooltipGuidByUnitToken = originalNameplateTooltipGuidByUnitToken
 	QuestTogether.nameplateScanTooltip = originalNameplateScanTooltip
@@ -243,24 +244,10 @@ local function WithIsolatedState(testFn)
 			"deferredNameplateQuestStateRefreshGeneration",
 			originalDeferredNameplateQuestStateRefreshGeneration
 		)
-	else
-		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce =
-			originalPendingScheduledTaskAreaRefreshShouldAnnounce
-		QuestTogether.pendingDeferredNameplateQuestStateRefresh = originalPendingDeferredNameplateQuestStateRefresh
-		QuestTogether.deferredNameplateQuestStateRefreshGeneration =
-			originalDeferredNameplateQuestStateRefreshGeneration
 	end
-	if QuestTogether.SetPendingWaypointIntent then
-		QuestTogether:SetPendingWaypointIntent(originalPendingWaypointIntent)
-	else
-		QuestTogether.pendingWaypointIntent = originalPendingWaypointIntent
-	end
-	if QuestTogether.GetRuntimeWorkStateStore then
-		QuestTogether:GetRuntimeWorkStateStore().deferredWorkState = originalDeferredWorkState
-		QuestTogether.deferredWorkState = originalDeferredWorkState
-	else
-		QuestTogether.deferredWorkState = originalDeferredWorkState
-	end
+	QuestTogether:SetPendingWaypointIntent(originalPendingWaypointIntent)
+	QuestTogether:GetRuntimeWorkStateStore().deferredWorkState = originalDeferredWorkState
+	QuestTogether.deferredWorkState = originalDeferredWorkState
 
 	if originalIsEnabled then
 		if QuestTogether.RegisterRuntimeEvents then
@@ -642,6 +629,7 @@ QuestTogether:RegisterTest("task area snapshot falls back to IsWorldQuest when q
 		AssertEquals(questId, 12345)
 		return true
 	end, function()
+		QuestTogether:RefreshTaskAreaStates(false)
 		local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
 		local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
 		AssertEquals(worldSnapshot[12345], "Fallback Classified World Quest")
@@ -681,6 +669,7 @@ QuestTogether:RegisterTest("task area snapshot ignores live task helper APIs and
 		end,
 	})
 
+	QuestTogether:RefreshTaskAreaStates(false)
 	local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
 	AssertEquals(worldSnapshot[22222], nil)
 end)
@@ -714,6 +703,7 @@ QuestTogether:RegisterTest("task area snapshot includes world quests from snapsh
 		end,
 	})
 
+	QuestTogether:RefreshTaskAreaStates(false)
 	local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
 	AssertEquals(worldSnapshot[22230], "Snapshot In Area World Quest")
 end)
@@ -751,6 +741,7 @@ QuestTogether:RegisterTest("task area snapshot treats world quests as tasks when
 		AssertEquals(questId, 33333)
 		return true
 	end, function()
+		QuestTogether:RefreshTaskAreaStates(false)
 		local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
 		AssertEquals(worldSnapshot[33333], "World Quest Without Task Flag")
 	end)
@@ -793,6 +784,7 @@ QuestTogether:RegisterTest("task area snapshot derives bonus objectives from sna
 			AssertEquals(questId, 33335)
 			return true
 		end, function()
+			QuestTogether:RefreshTaskAreaStates(false)
 			local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
 			AssertEquals(bonusSnapshot[33335], "Bonus Objective Without Live Helpers")
 		end)
@@ -806,16 +798,12 @@ QuestTogether:RegisterTest("quest-blob state change refreshes task area states w
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
 			scheduledCalls = scheduledCalls + 1
-			AssertEquals(seconds, 0)
+			AssertEquals(seconds, 0.1)
 			callback()
 		end,
 	})
 	QuestTogether.isEnabled = true
-	if QuestTogether.SetRuntimeFlag then
-		QuestTogether:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", nil)
-	else
-		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = nil
-	end
+	QuestTogether:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", nil)
 
 	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function(_, shouldAnnounce)
 		AssertTrue(shouldAnnounce)
@@ -824,7 +812,7 @@ QuestTogether:RegisterTest("quest-blob state change refreshes task area states w
 		QuestTogether:PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED("PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED", 22233, true)
 	end)
 
-	AssertEquals(scheduledCalls, 0)
+	AssertEquals(scheduledCalls, 1)
 	AssertEquals(refreshCalls, 1)
 end)
 
@@ -861,6 +849,7 @@ QuestTogether:RegisterTest("task area snapshot treats world quests as tasks when
 		AssertEquals(questId, 33333)
 		return true
 	end, function()
+		QuestTogether:RefreshTaskAreaStates(false)
 		local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
 		AssertEquals(worldSnapshot[33333], "World Quest Without Task Flag")
 	end)
@@ -906,6 +895,7 @@ QuestTogether:RegisterTest("task area snapshot does not use task-active fallback
 			AssertEquals(questId, 33334)
 			return false
 		end, function()
+			QuestTogether:RefreshTaskAreaStates(false)
 			local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
 			local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
 			AssertEquals(worldSnapshot[33334], nil)
@@ -957,6 +947,7 @@ QuestTogether:RegisterTest("task area snapshot avoids map task API reads that ta
 			AssertEquals(questId, 33335)
 			return true
 		end, function()
+			QuestTogether:RefreshTaskAreaStates(false)
 			local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
 			AssertEquals(bonusSnapshot[33335], "Bonus Objective Without Map Arrays")
 		end)
@@ -971,25 +962,28 @@ QuestTogether:RegisterTest("world quest area refresh publishes enter and leave e
 		QuestTogether.worldQuestAreaStateByQuestID = {}
 	end
 
-	local activeSnapshot = {}
-	WithPatchedMethod(QuestTogether, "GetActiveWorldQuestAreaSnapshot", function()
-		return activeSnapshot
+	local resolverState = QuestTogether:GetTaskAreaSubsystemStateStore()
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
 	end, function()
-		WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
-			events[#events + 1] = {
-				eventType = eventType,
-				text = text,
-				questId = questId,
-			}
-		end, function()
-			activeSnapshot = {
-				[12345] = "Snapshot World Quest",
-			}
-			QuestTogether:RefreshWorldQuestAreaState(true)
+		resolverState.resolvedByQuestID = {
+			[12345] = {
+				questID = 12345,
+				title = "Snapshot World Quest",
+				includeWorld = true,
+				includeBonus = false,
+			},
+		}
+		resolverState.resolutionOrder = { 12345 }
+		QuestTogether:RefreshWorldQuestAreaState(true)
 
-			activeSnapshot = {}
-			QuestTogether:RefreshWorldQuestAreaState(true)
-		end)
+		resolverState.resolvedByQuestID = {}
+		resolverState.resolutionOrder = {}
+		QuestTogether:RefreshWorldQuestAreaState(true)
 	end)
 
 	AssertEquals(events[1].eventType, "WORLD_QUEST_ENTERED")
@@ -1007,7 +1001,7 @@ QuestTogether:RegisterTest("super tracking changed defers task area refresh off 
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
 			scheduledCalls = scheduledCalls + 1
-			AssertEquals(seconds, 0)
+			AssertEquals(seconds, 0.1)
 			callback()
 		end,
 	})
@@ -1020,7 +1014,7 @@ QuestTogether:RegisterTest("super tracking changed defers task area refresh off 
 		QuestTogether:SUPER_TRACKING_CHANGED()
 	end)
 
-	AssertEquals(scheduledCalls, 0)
+	AssertEquals(scheduledCalls, 1)
 	AssertEquals(refreshCalls, 1)
 end)
 
@@ -1031,16 +1025,12 @@ QuestTogether:RegisterTest("quest poi update defers task area refresh off the li
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
 			scheduledCalls = scheduledCalls + 1
-			AssertEquals(seconds, 0)
+			AssertEquals(seconds, 0.1)
 			callback()
 		end,
 	})
 	QuestTogether.isEnabled = true
-	if QuestTogether.SetRuntimeFlag then
-		QuestTogether:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", nil)
-	else
-		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = nil
-	end
+	QuestTogether:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", nil)
 
 	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function(_, shouldAnnounce)
 		AssertTrue(shouldAnnounce)
@@ -1049,7 +1039,7 @@ QuestTogether:RegisterTest("quest poi update defers task area refresh off the li
 		QuestTogether:QUEST_POI_UPDATE()
 	end)
 
-	AssertEquals(scheduledCalls, 0)
+	AssertEquals(scheduledCalls, 1)
 	AssertEquals(refreshCalls, 1)
 end)
 
@@ -1773,10 +1763,10 @@ QuestTogether:RegisterTest("tooltip quest detection does not iterate tooltip arg
 	end)
 end)
 
-QuestTogether:RegisterTest("tooltip quest detection blocks live structured scans in combat", function()
+QuestTogether:RegisterTest("tooltip quest detection blocks live scans while map-sensitive runtime gate is active", function()
 	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
 	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
+		IsWorldMapVisible = function()
 			return true
 		end,
 	})
@@ -1791,13 +1781,13 @@ QuestTogether:RegisterTest("tooltip quest detection blocks live structured scans
 				return "Creature-0-0-0-0-12345-0000000000"
 			end, function()
 				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-					error("combat runtime gate should not touch Questie or tooltip APIs")
+					error("map-sensitive runtime gate should not touch Questie or tooltip APIs")
 				end, function()
 					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
-						error("combat runtime gate should not touch live structured tooltip scans")
+						error("map-sensitive runtime gate should not touch live structured tooltip scans")
 					end, function()
 						WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
-							error("combat runtime gate should not touch hidden tooltip fallback")
+							error("map-sensitive runtime gate should not touch hidden tooltip fallback")
 						end, function()
 							AssertFalse(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
 						end)
@@ -1806,6 +1796,55 @@ QuestTogether:RegisterTest("tooltip quest detection blocks live structured scans
 			end)
 		end)
 	end)
+end)
+
+QuestTogether:RegisterTest("tooltip quest detection allows live scans in combat when map is closed", function()
+	local hiddenScanCount = 0
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.API = CreateApiWithOverrides({
+		InCombatLockdown = function()
+			return true
+		end,
+		IsWorldMapVisible = function()
+			return false
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
+		return true
+	end, function()
+		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+			return false
+		end, function()
+			WithPatchedMethod(QuestTogether, "GetNameplateTooltipScanGuid", function()
+				return "Creature-0-0-0-0-12345-0000000000"
+			end, function()
+				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
+					return nil
+				end, function()
+					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
+						return nil
+					end, function()
+						WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
+							hiddenScanCount = hiddenScanCount + 1
+							return {
+								{
+									leftText = "Tracking the Trail",
+								},
+								{
+									leftText = "1/8 Digested Object",
+								},
+							}
+						end, function()
+							AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+						end)
+					end)
+				end)
+			end)
+		end)
+	end)
+
+	AssertEquals(hiddenScanCount, 1)
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection reuses cached state while runtime gate blocks live scans", function()
@@ -1927,14 +1966,14 @@ QuestTogether:RegisterTest("nameplate quest detection cache is keyed by guid and
 	end)
 end)
 
-QuestTogether:RegisterTest("tooltip quest detection reuses cached results in combat instead of rescanning", function()
+QuestTogether:RegisterTest("tooltip quest detection reuses cached results while map-sensitive runtime gate blocks rescanning", function()
 	local structuredScanCount = 0
 	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
 	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-12345-0000000000"] = true
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate1"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
 	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
+		IsWorldMapVisible = function()
 			return true
 		end,
 	})
@@ -1949,11 +1988,11 @@ QuestTogether:RegisterTest("tooltip quest detection reuses cached results in com
 				return "Creature-0-0-0-0-12345-0000000000"
 			end, function()
 				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-					error("combat runtime gate should reuse cached state instead of scanning")
+					error("map-sensitive runtime gate should reuse cached state instead of scanning")
 				end, function()
 					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
 						structuredScanCount = structuredScanCount + 1
-						error("combat runtime gate should reuse cached state instead of rescanning")
+						error("map-sensitive runtime gate should reuse cached state instead of rescanning")
 					end, function()
 						AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
 						AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
@@ -2293,18 +2332,6 @@ QuestTogether:RegisterTest("nameplate quest title cache uses quest log titles wi
 		IsInInstance = function()
 			return false
 		end,
-		GetNumQuestLogEntries = function()
-			return 1
-		end,
-		GetQuestLogInfo = function(questLogIndex)
-			AssertEquals(questLogIndex, 1)
-			return {
-				questID = 10101,
-				title = "Log Quest",
-				isHeader = false,
-				isHidden = false,
-			}
-		end,
 		GetPlayerMapID = function(unitToken)
 			error("map task title cache reads should stay disabled for Blizzard map safety")
 		end,
@@ -2315,6 +2342,16 @@ QuestTogether:RegisterTest("nameplate quest title cache uses quest log titles wi
 			error("map task title cache reads should stay disabled for Blizzard map safety")
 		end,
 	})
+	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	snapshotState.byQuestID = {
+		[10101] = {
+			questID = 10101,
+			title = "Log Quest",
+			isHeader = false,
+			isHidden = false,
+		},
+	}
+	snapshotState.order = { 10101 }
 
 	WithPatchedMethod(QuestTogether, "GetActiveWorldQuestAreaSnapshot", function()
 		error("area snapshot fallback is not part of Plater's quest cache")
@@ -2332,21 +2369,19 @@ QuestTogether:RegisterTest("nameplate quest title cache uses quest log titles wi
 end)
 
 QuestTogether:RegisterTest("nameplate quest title cache includes hidden quest log titles like Plater", function()
+	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	snapshotState.byQuestID = {
+		[20202] = {
+			questID = 20202,
+			title = "Hidden Quest",
+			isHeader = false,
+			isHidden = true,
+		},
+	}
+	snapshotState.order = { 20202 }
 	QuestTogether.API = CreateApiWithOverrides({
 		IsInInstance = function()
 			return false
-		end,
-		GetNumQuestLogEntries = function()
-			return 1
-		end,
-		GetQuestLogInfo = function(questLogIndex)
-			AssertEquals(questLogIndex, 1)
-			return {
-				questID = 20202,
-				title = "Hidden Quest",
-				isHeader = false,
-				isHidden = true,
-			}
 		end,
 	})
 
@@ -2356,23 +2391,21 @@ QuestTogether:RegisterTest("nameplate quest title cache includes hidden quest lo
 end)
 
 QuestTogether:RegisterTest("nameplate quest title cache still rebuilds during combat like Plater", function()
+	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	snapshotState.byQuestID = {
+		[12345] = {
+			questID = 12345,
+			title = "Combat Quest",
+			isHeader = false,
+		},
+	}
+	snapshotState.order = { 12345 }
 	QuestTogether.API = CreateApiWithOverrides({
 		IsInInstance = function()
 			return false
 		end,
 		InCombatLockdown = function()
 			return true
-		end,
-		GetNumQuestLogEntries = function()
-			return 1
-		end,
-		GetQuestLogInfo = function(entryIndex)
-			AssertEquals(entryIndex, 1)
-			return {
-				title = "Combat Quest",
-				isHeader = false,
-				questID = 12345,
-			}
 		end,
 		GetPlayerMapID = function()
 			return nil
@@ -3277,51 +3310,16 @@ QuestTogether:RegisterTest("bonus objective console announcement uses bonus obje
 	AssertTrue(string.find(message, "|cffffd200: entered the area|r", 1, true) ~= nil)
 end)
 
-QuestTogether:RegisterTest("world quest announcement icon info uses Blizzard world quest atlas", function()
-	WithPatchedMethod(QuestTogether, "GetQuestTagInfo", function(_, questId)
-		AssertEquals(questId, 12345)
-		return { worldQuestType = 7 }
-	end, function()
-		WithPatchedMethod(QuestTogether, "GetWorldQuestAtlasInfo", function(_, questId, tagInfo, inProgress)
-			AssertEquals(questId, 12345)
-			AssertEquals(tagInfo.worldQuestType, 7)
-			AssertEquals(inProgress, false)
-			return "worldquest-icon-petbattle"
-		end, function()
-			WithPatchedMethod(QuestTogether, "GetQuestDetailsThemePoiIcon", function()
-				return nil
-			end, function()
-				local asset, kind = QuestTogether:GetAnnouncementIconInfo("WORLD_QUEST_PROGRESS", 12345)
-				AssertEquals(asset, "worldquest-icon-petbattle")
-				AssertEquals(kind, "atlas")
-			end)
-		end)
-	end)
+QuestTogether:RegisterTest("world quest announcement icon info uses static world quest atlas", function()
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("WORLD_QUEST_PROGRESS", 12345)
+	AssertEquals(asset, "worldquest-icon")
+	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("bonus objective announcement icon info prefers quest tag atlas", function()
-	WithPatchedMethod(QuestTogether, "GetQuestTagInfo", function(_, questId)
-		AssertEquals(questId, 54321)
-		return { tagID = 9, worldQuestType = nil }
-	end, function()
-		WithPatchedMethod(QuestTogether, "GetQuestTagAtlas", function(_, tagID, worldQuestType)
-			AssertEquals(tagID, 9)
-			AssertEquals(worldQuestType, nil)
-			return "poi-door-arrow-up"
-		end, function()
-			WithPatchedMethod(QuestTogether, "GetQuestDetailsThemePoiIcon", function()
-				return nil
-			end, function()
-				WithPatchedMethod(QuestTogether, "GetQuestStateAnnouncementIconInfo", function()
-					return "CampaignInProgressQuestIcon", "atlas"
-				end, function()
-					local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", 54321)
-					AssertEquals(asset, "poi-door-arrow-up")
-					AssertEquals(kind, "atlas")
-				end)
-			end)
-		end)
-	end)
+QuestTogether:RegisterTest("bonus objective announcement icon info uses static bonus objective atlas", function()
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", 54321)
+	AssertEquals(asset, "Bonus-Objective-Star")
+	AssertEquals(kind, "atlas")
 end)
 
 QuestTogether:RegisterTest("console announcement uses sender provided quest icon asset", function()
@@ -4600,11 +4598,7 @@ QuestTogether:RegisterTest("nameplate quest state events use Plater-style delaye
 		end,
 	})
 	QuestTogether.isEnabled = true
-	if QuestTogether.SetRuntimeFlag then
-		QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", nil)
-	else
-		QuestTogether.pendingDeferredNameplateQuestStateRefresh = nil
-	end
+	QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", nil)
 
 	WithPatchedMethod(QuestTogether, "RefreshNameplatesForQuestStateChange", function(_, reason)
 		AssertEquals(reason, "QUEST_POI_UPDATE")
@@ -4623,13 +4617,8 @@ QuestTogether:RegisterTest("nameplate quest state refresh coalesces like Plater 
 	local refreshCalls = 0
 
 	QuestTogether.isEnabled = true
-	if QuestTogether.SetRuntimeFlag then
-		QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-		QuestTogether:SetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
-	else
-		QuestTogether.pendingDeferredNameplateQuestStateRefresh = false
-		QuestTogether.deferredNameplateQuestStateRefreshGeneration = 0
-	end
+	QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
+	QuestTogether:SetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
 			AssertEquals(seconds, 1)
@@ -4650,7 +4639,7 @@ QuestTogether:RegisterTest("nameplate quest state refresh coalesces like Plater 
 		AssertEquals(refreshCalls, 0)
 		scheduledCallbacks[2]()
 		AssertEquals(refreshCalls, 1)
-		AssertFalse(QuestTogether.pendingDeferredNameplateQuestStateRefresh)
+		AssertFalse(QuestTogether:GetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false))
 	end)
 end)
 
