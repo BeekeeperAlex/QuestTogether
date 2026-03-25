@@ -725,6 +725,27 @@ QuestTogether.API = QuestTogether.API or {
 			if not numericQuestID then
 				return nil
 			end
+			if type(GetNumQuestLogEntries) == "function" and type(GetQuestLogTitle) == "function" then
+				local okCount, count = pcall(GetNumQuestLogEntries)
+				if okCount and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(count)) then
+					local numericCount = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(count) or nil
+					if numericCount and numericCount > 0 then
+						numericCount = math.floor(numericCount + 0.5)
+						for questLogIndex = 1, numericCount do
+							local okTitle, _, _, _, _, _, _, _, entryQuestID = pcall(GetQuestLogTitle, questLogIndex)
+							if okTitle then
+								local normalizedEntryQuestID = QuestTogether
+									and QuestTogether.NormalizeQuestID
+									and QuestTogether:NormalizeQuestID(entryQuestID)
+									or nil
+								if normalizedEntryQuestID == numericQuestID then
+									return questLogIndex
+								end
+							end
+						end
+					end
+				end
+			end
 			if C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
 				local ok, questLogIndex = pcall(C_QuestLog.GetLogIndexForQuestID, numericQuestID)
 				if not ok then
@@ -733,7 +754,13 @@ QuestTogether.API = QuestTogether.API or {
 				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questLogIndex) then
 					return nil
 				end
-				return questLogIndex
+				local numericQuestLogIndex = QuestTogether and QuestTogether.SafeToNumber
+					and QuestTogether:SafeToNumber(questLogIndex)
+					or nil
+				if numericQuestLogIndex == nil or numericQuestLogIndex <= 0 then
+					return nil
+				end
+				return math.floor(numericQuestLogIndex + 0.5)
 			end
 			return nil
 		end,
@@ -1109,6 +1136,15 @@ QuestTogether.API = QuestTogether.API or {
 			return false
 		end,
 		GetNumQuestLogEntries = function()
+			if type(GetNumQuestLogEntries) == "function" then
+				local ok, count = pcall(GetNumQuestLogEntries)
+				if ok and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(count)) then
+					local numericCount = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(count) or nil
+					if numericCount and numericCount > 0 then
+						return math.floor(numericCount + 0.5)
+					end
+				end
+			end
 			if C_QuestLog and C_QuestLog.GetNumQuestLogEntries then
 				local ok, count = pcall(C_QuestLog.GetNumQuestLogEntries)
 				if not ok then
@@ -1117,10 +1153,14 @@ QuestTogether.API = QuestTogether.API or {
 				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(count) then
 					return 0
 				end
-				if type(count) ~= "number" then
+				local numericCount = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(count) or nil
+				if numericCount == nil then
 					return 0
 				end
-				return count
+				if numericCount <= 0 then
+					return 0
+				end
+				return math.floor(numericCount + 0.5)
 			end
 			return 0
 		end,
@@ -1156,6 +1196,7 @@ QuestTogether.API = QuestTogether.API or {
 				local titleIsSecret = QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(titleValue)
 				local sanitizedInfo = {
 					title = (type(titleValue) == "string" and not titleIsSecret) and titleValue or nil,
+					questLogIndex = numericQuestLogIndex,
 					isHeader = NormalizeQuestInfoFlag(isHeaderValue) == true,
 					isHidden = NormalizeQuestInfoFlag(isHiddenValue) == true,
 					isTask = NormalizeQuestInfoFlag(isTaskValue) == true,
@@ -1240,20 +1281,36 @@ QuestTogether.API = QuestTogether.API or {
 			if InCombatLockdown and InCombatLockdown() then
 				return 0
 			end
+			local numericQuestLogIndex = QuestTogether and QuestTogether.SafeToNumber
+				and QuestTogether:SafeToNumber(questLogIndex)
+				or nil
+			if numericQuestLogIndex == nil then
+				return 0
+			end
+			numericQuestLogIndex = math.floor(numericQuestLogIndex + 0.5)
+			if numericQuestLogIndex <= 0 then
+				return 0
+			end
 			if type(GetNumQuestLeaderBoards) ~= "function" then
 				return 0
 			end
-			local ok, objectiveCount = pcall(GetNumQuestLeaderBoards, questLogIndex)
+			local ok, objectiveCount = pcall(GetNumQuestLeaderBoards, numericQuestLogIndex)
 			if not ok then
 				return 0
 			end
 			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(objectiveCount) then
 				return 0
 			end
-			if type(objectiveCount) ~= "number" then
+			local numericObjectiveCount = QuestTogether and QuestTogether.SafeToNumber
+				and QuestTogether:SafeToNumber(objectiveCount)
+				or nil
+			if numericObjectiveCount == nil then
 				return 0
 			end
-			return objectiveCount
+			if numericObjectiveCount <= 0 then
+				return 0
+			end
+			return math.floor(numericObjectiveCount + 0.5)
 		end,
 		GetQuestObjectiveInfo = function(questID, objectiveIndex, displayComplete)
 			if InCombatLockdown and InCombatLockdown() then
@@ -4640,9 +4697,18 @@ function QuestTogether:WatchQuest(questId, questInfo)
 	end
 
 	local tracker = self:GetPlayerTracker()
-	local questLogIndex = self.API
-		and self.API.GetQuestLogIndexForQuestID
-		and self.API.GetQuestLogIndexForQuestID(numericQuestId)
+	local questLogIndex = questInfo and self:SafeToNumber(questInfo.questLogIndex) or nil
+	if questLogIndex then
+		questLogIndex = math.floor(questLogIndex + 0.5)
+		if questLogIndex <= 0 then
+			questLogIndex = nil
+		end
+	end
+	if not questLogIndex then
+		questLogIndex = self.API
+			and self.API.GetQuestLogIndexForQuestID
+			and self.API.GetQuestLogIndexForQuestID(numericQuestId)
+	end
 	local questTitle = self:GetQuestTitle(numericQuestId, questInfo)
 
 	tracker[numericQuestId] = {

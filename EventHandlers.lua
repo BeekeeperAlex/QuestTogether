@@ -79,40 +79,6 @@ local function NormalizeBooleanLike(addon, value)
 	return nil
 end
 
-local function BuildLocalTaskQuestSet(addon)
-	if not addon or not addon.API or type(addon.API.GetLocalTaskQuests) ~= "function" then
-		return nil
-	end
-
-	local questIds = addon.API.GetLocalTaskQuests()
-	if type(questIds) ~= "table" then
-		return nil
-	end
-
-	local questIdSet = {}
-	local addedAny = false
-	for index = 1, #questIds do
-		local normalizedQuestId = NormalizeQuestId(addon, questIds[index])
-		if normalizedQuestId then
-			questIdSet[normalizedQuestId] = true
-			addedAny = true
-		end
-	end
-
-	if not addedAny then
-		return nil
-	end
-
-	return questIdSet
-end
-
-local function BuildTaskAreaContext(addon, taskType)
-	local localTaskQuestSet = BuildLocalTaskQuestSet(addon)
-	-- Do not read C_TaskQuest/C_QuestLog map task arrays here.
-	-- Those tables can taint Blizzard map pin update paths such as SharedMapPoiTemplates.
-	return localTaskQuestSet, nil
-end
-
 local DrainQueuedQuestLogTasks
 
 local function BuildQuestLogQuestInfoIndex(addon)
@@ -138,168 +104,36 @@ local function BuildQuestLogQuestInfoIndex(addon)
 	return questInfoByQuestId
 end
 
-local function BuildTaskAreaCandidateQuestIds(addon, taskType, questInfoByQuestId, localTaskQuestSet, mapTaskQuestSet)
+local function BuildTaskAreaCandidateQuestIds(addon, taskType, questInfoByQuestId)
 	local candidateQuestIds = {}
 
 	for normalizedQuestId in pairs(questInfoByQuestId or {}) do
 		candidateQuestIds[normalizedQuestId] = true
 	end
 
-	for normalizedQuestId in pairs(localTaskQuestSet or {}) do
-		candidateQuestIds[normalizedQuestId] = true
-	end
-
-	if taskType == "world" then
-		return candidateQuestIds
-	end
-
-	for normalizedQuestId in pairs(mapTaskQuestSet or {}) do
-		candidateQuestIds[normalizedQuestId] = true
-	end
-
 	return candidateQuestIds
 end
 
-local function ResolveWorldQuestAreaSignals(addon, questInfo, normalizedQuestId, localTaskQuestSet)
-	local taskInfoInArea = nil
-	local taskInfoOnMap = nil
-	if addon and addon.API and addon.API.GetTaskInfo then
-		taskInfoInArea, taskInfoOnMap = addon.API.GetTaskInfo(normalizedQuestId)
-		taskInfoInArea = NormalizeBooleanLike(addon, taskInfoInArea)
-		taskInfoOnMap = NormalizeBooleanLike(addon, taskInfoOnMap)
-	end
-
-	local localTaskInArea = nil
-	if type(localTaskQuestSet) == "table" and localTaskQuestSet[normalizedQuestId] == true then
-		localTaskInArea = true
-	end
-
-	local taskActiveRaw = taskInfoInArea
-	if addon and addon.API and addon.API.IsTaskQuestActive then
-		local isTaskActiveFallback = NormalizeBooleanLike(addon, addon.API.IsTaskQuestActive(normalizedQuestId))
-		if taskActiveRaw == nil then
-			taskActiveRaw = isTaskActiveFallback
-		end
-	end
-
+local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId)
 	local mapFlags = questInfo and (questInfo.isOnMap == true or questInfo.hasLocalPOI == true) and true or false
-	local mapFallback = nil
-	if addon and addon.API and addon.API.IsQuestOnMap then
-		mapFallback = NormalizeBooleanLike(addon, addon.API.IsQuestOnMap(normalizedQuestId))
+	local explicitTask = questInfo and questInfo.isTask == true or false
+	local explicitWorld = questInfo and questInfo.isWorldQuest == true or false
+	local bonusFallback = addon:IsBonusObjective(normalizedQuestId)
+
+	local areaActive = mapFlags
+	if taskType == "bonus" and not areaActive and explicitTask and not explicitWorld and bonusFallback then
+		areaActive = true
 	end
-
-	local hasMapPresence = (localTaskInArea == true) or (taskInfoOnMap == true) or mapFlags or (mapFallback == true)
-
-	local taskActiveForArea = taskActiveRaw
-	if taskActiveForArea == true and not hasMapPresence then
-		taskActiveForArea = nil
-	end
-
-	local areaActive = localTaskInArea == true and taskInfoInArea == true
-
-	local canUseTaskActiveWorldFallback = taskActiveRaw == true and hasMapPresence
 
 	return {
-		taskInfoInArea = taskInfoInArea,
-		taskInfoOnMap = taskInfoOnMap,
-		localTaskInArea = localTaskInArea,
-		taskActiveRaw = taskActiveRaw,
-		taskActiveForArea = taskActiveForArea,
 		mapFlags = mapFlags,
-		mapFallback = mapFallback,
-		hasMapPresence = hasMapPresence,
-		areaActive = areaActive,
-		canUseTaskActiveWorldFallback = canUseTaskActiveWorldFallback,
+		areaActive = areaActive and true or false,
+		taskActiveForArea = areaActive and true or false,
+		canUseTaskActiveWorldFallback = false,
 	}
 end
 
-local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId, localTaskQuestSet, mapTaskQuestSet)
-	if taskType == "world" then
-		return ResolveWorldQuestAreaSignals(addon, questInfo, normalizedQuestId, localTaskQuestSet)
-	end
-
-	local taskInfoInArea = nil
-	local taskInfoOnMap = nil
-	if addon and addon.API and addon.API.GetTaskInfo then
-		taskInfoInArea, taskInfoOnMap = addon.API.GetTaskInfo(normalizedQuestId)
-		taskInfoInArea = NormalizeBooleanLike(addon, taskInfoInArea)
-		taskInfoOnMap = NormalizeBooleanLike(addon, taskInfoOnMap)
-	end
-
-	local localTaskInArea = nil
-	if type(localTaskQuestSet) == "table" and localTaskQuestSet[normalizedQuestId] == true then
-		localTaskInArea = true
-	end
-
-	local mapTaskInArea = nil
-	if type(mapTaskQuestSet) == "table" and mapTaskQuestSet[normalizedQuestId] == true then
-		mapTaskInArea = true
-	end
-
-	local taskActiveRaw = taskInfoInArea
-	if taskActiveRaw == nil and localTaskInArea == true then
-		taskActiveRaw = true
-	end
-	if taskActiveRaw == nil and mapTaskInArea == true then
-		taskActiveRaw = true
-	end
-	if addon and addon.API and addon.API.IsTaskQuestActive then
-		local isTaskActiveFallback = NormalizeBooleanLike(addon, addon.API.IsTaskQuestActive(normalizedQuestId))
-		if taskActiveRaw == nil then
-			taskActiveRaw = isTaskActiveFallback
-		end
-	end
-
-	local mapFlags = questInfo and (questInfo.isOnMap == true or questInfo.hasLocalPOI == true) and true or false
-	local mapFallback = nil
-	if addon and addon.API and addon.API.IsQuestOnMap then
-		mapFallback = NormalizeBooleanLike(addon, addon.API.IsQuestOnMap(normalizedQuestId))
-	end
-
-	local hasMapPresence = (localTaskInArea == true)
-		or (mapTaskInArea == true)
-		or (taskInfoOnMap == true)
-		or mapFlags
-		or (mapFallback == true)
-
-	local taskActiveForArea = taskActiveRaw
-	if taskActiveForArea == true and not hasMapPresence then
-		taskActiveForArea = nil
-	end
-
-	local areaActive = nil
-	if type(taskInfoInArea) == "boolean" then
-		areaActive = taskInfoInArea
-	elseif localTaskInArea == true then
-		areaActive = true
-	elseif mapTaskInArea == true then
-		areaActive = true
-	elseif type(taskInfoOnMap) == "boolean" then
-		areaActive = taskInfoOnMap
-	elseif type(taskActiveForArea) == "boolean" then
-		areaActive = taskActiveForArea
-	else
-		areaActive = mapFlags or (mapFallback == true)
-	end
-
-	local canUseTaskActiveWorldFallback = taskActiveRaw == true and hasMapPresence
-
-	return {
-		taskInfoInArea = taskInfoInArea,
-		taskInfoOnMap = taskInfoOnMap,
-		localTaskInArea = localTaskInArea,
-		mapTaskInArea = mapTaskInArea,
-		taskActiveRaw = taskActiveRaw,
-		taskActiveForArea = taskActiveForArea,
-		mapFlags = mapFlags,
-		mapFallback = mapFallback,
-		hasMapPresence = hasMapPresence,
-		areaActive = areaActive,
-		canUseTaskActiveWorldFallback = canUseTaskActiveWorldFallback,
-	}
-end
-
-local function EvaluateTaskAreaQuestCandidate(addon, taskType, normalizedQuestId, questInfo, localTaskQuestSet, mapTaskQuestSet)
+local function EvaluateTaskAreaQuestCandidate(addon, taskType, normalizedQuestId, questInfo)
 	local title = addon:GetQuestTitle(normalizedQuestId, questInfo)
 	local explicitWorld = questInfo and questInfo.isWorldQuest == true or false
 	local fallbackWorld = addon:IsWorldQuest(normalizedQuestId)
@@ -309,7 +143,7 @@ local function EvaluateTaskAreaQuestCandidate(addon, taskType, normalizedQuestId
 	local bonusFallback = addon:IsBonusObjective(normalizedQuestId)
 	local isTask = taskFlag or isWorldQuest or bonusFallback
 
-	local areaSignals = ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId, localTaskQuestSet, mapTaskQuestSet)
+	local areaSignals = ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId)
 	local isWorldQuestByActiveTaskFallback = false
 	if not isWorldQuest and areaSignals.canUseTaskActiveWorldFallback and not bonusFallback then
 		isWorldQuest = true
@@ -610,23 +444,18 @@ function QuestTogether:HandleGroupRosterChanged(reason)
 	)
 end
 
--- Snapshot active task quests from sanitized quest-log rows.
--- World quest area membership intentionally mirrors Blizzard's tracker behavior more closely:
--- candidate quests come from quest-log rows plus GetTasksTable(), and inclusion requires the
--- local task list and GetTaskInfo(...).isInArea to agree before we announce entry/leave.
--- We only copy scalar quest IDs from Blizzard task tables and never retain/mutate their rows.
+-- Snapshot active task quests from sanitized quest-log rows only.
+-- This intentionally avoids live task-area helper APIs such as GetTasksTable(), GetTaskInfo(),
+-- and IsQuestOnMap(), which have proven to taint Blizzard world-map pin and quest-list paths.
 function QuestTogether:GetTaskAreaSnapshot(taskType)
 	local activeByQuestId = {}
 
 	if self.API and self.API.GetNumQuestLogEntries and self.API.GetQuestLogInfo then
-		local localTaskQuestSet, mapTaskQuestSet = BuildTaskAreaContext(self, taskType)
 		local questInfoByQuestId = BuildQuestLogQuestInfoIndex(self)
-		local candidateQuestIds =
-			BuildTaskAreaCandidateQuestIds(self, taskType, questInfoByQuestId, localTaskQuestSet, mapTaskQuestSet)
+		local candidateQuestIds = BuildTaskAreaCandidateQuestIds(self, taskType, questInfoByQuestId)
 		for _, normalizedQuestId in ipairs(SortedQuestIdKeys(candidateQuestIds)) do
 			local questInfo = questInfoByQuestId[normalizedQuestId]
-			local evaluation =
-				EvaluateTaskAreaQuestCandidate(self, taskType, normalizedQuestId, questInfo, localTaskQuestSet, mapTaskQuestSet)
+			local evaluation = EvaluateTaskAreaQuestCandidate(self, taskType, normalizedQuestId, questInfo)
 			if evaluation.include then
 				activeByQuestId[normalizedQuestId] = evaluation.title
 			end

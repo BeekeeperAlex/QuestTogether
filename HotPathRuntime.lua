@@ -87,6 +87,15 @@ function QuestTogether:IsRuntimeRestricted()
 	return false
 end
 
+function QuestTogether:IsMapTooltipSensitiveStateActive()
+	if not (self and self.API and type(self.API.IsWorldMapVisible) == "function") then
+		return false
+	end
+
+	local ok, isVisible = pcall(self.API.IsWorldMapVisible)
+	return ok and isVisible and true or false
+end
+
 function QuestTogether:IsWorkBlocked(workClass)
 	if workClass == "waypoint_mutation" then
 		return self:IsRuntimeRestricted()
@@ -97,14 +106,20 @@ function QuestTogether:IsWorkBlocked(workClass)
 	end
 
 	if workClass == "nameplate_tooltip_resolve" then
-		return self:IsRuntimeRestricted()
-	end
-
-	if workClass == "nameplate_quest_refresh" or workClass == "nameplate_refresh" or workClass == "nameplate_tint_refresh" then
+		if self:IsMapTooltipSensitiveStateActive() then
+			return true
+		end
 		return self:IsRuntimeRestricted()
 	end
 
 	if workClass == "quest_log_drain" or workClass == "task_area_refresh" or workClass == "quest_snapshot_refresh" then
+		if self:IsMapTooltipSensitiveStateActive() then
+			return true
+		end
+		return self:IsRuntimeRestricted()
+	end
+
+	if workClass == "nameplate_quest_refresh" or workClass == "nameplate_refresh" or workClass == "nameplate_tint_refresh" then
 		return self:IsRuntimeRestricted()
 	end
 
@@ -187,7 +202,18 @@ function QuestTogether:FlushDeferredWork(reason)
 		return false
 	end
 
+	local pendingEntries = {}
 	for workKey, entry in pairs(state.entries or {}) do
+		pendingEntries[#pendingEntries + 1] = {
+			workKey = workKey,
+			entry = entry,
+		}
+	end
+
+	for index = 1, #pendingEntries do
+		local pending = pendingEntries[index]
+		local workKey = pending and pending.workKey or nil
+		local entry = pending and pending.entry or nil
 		if entry and type(entry.callback) == "function" then
 			self:ScheduleDeferredWork(entry.workClass, entry.key, entry.callback, 0, reason or entry.reason)
 		else

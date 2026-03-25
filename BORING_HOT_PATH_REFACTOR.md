@@ -46,6 +46,12 @@
 - Verified Lua syntax with `luac -p` for `Core.lua`, `HotPathState.lua`, `HotPathRuntime.lua`, `Nameplates.lua`, `EventHandlers.lua`, and `Tests.lua`.
 - Ran a live `/qt test` pass via the user and used the failures to fix one real scheduler defect: blocked delayed work no longer recursively re-enqueues itself under synchronous delay stubs.
 - Realigned failing tests to shared-runtime behavior where feature-local pending flags and per-feature helper methods were intentionally removed.
+- Fixed a live combat-end scheduler bug in `FlushDeferredWork()`: it now snapshots deferred entries before replay so Lua table iteration cannot be invalidated by mid-flush rewrites.
+- Reintroduced one narrow map-specific boundary rule after live validation: `nameplate_tooltip_resolve` is blocked while the world map is visible, because Blizzard's AreaPOI/QuestOffer tooltip layout path still taints on retail if live quest-tooltip resolution runs concurrently.
+- Expanded that same world-map boundary to `quest_log_drain`, `task_area_refresh`, and `quest_snapshot_refresh` after live quest-map validation showed Blizzard quest-list layout can also surface secret-number taint if QuestTogether performs quest-log/task snapshot work while the map UI is building.
+- Hardened quest-log numeric wrappers so `GetQuestLogIndexForQuestID`, `GetNumQuestLogEntries`, and `GetNumQuestLeaderBoards` always return normalized primitive numbers instead of raw Blizzard numerics.
+- `GetQuestLogIndexForQuestID` now prefers a sanitized quest-log scan over `C_QuestLog.GetLogIndexForQuestID`, and sanitized quest-log snapshots now carry an addon-owned `questLogIndex` so `WatchQuest()` does not need to re-query Blizzard for it during full scans.
+- Removed the last runtime uses of `GetTasksTable()`, `GetTaskInfo()`, and `IsQuestOnMap()` from task-area snapshots. Task-area enter/leave detection is now derived from sanitized quest-log rows only to avoid contaminating Blizzard's map canvas and quest-list flows.
 
 ## Open Risks
 - Static validation is clean, and one live `/qt test` pass already exposed and validated follow-up fixes, but another in-game `/qt test` and combat/world-map regression pass is still needed after the latest patches.
