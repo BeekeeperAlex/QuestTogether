@@ -1134,6 +1134,69 @@ QuestTogether.API = QuestTogether.API or {
 				return nil
 			end
 
+			local function NormalizeQuestInfoFlag(rawValue)
+				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
+					return nil
+				end
+				if type(rawValue) == "boolean" then
+					return rawValue
+				end
+				local numericFlag = QuestTogether and QuestTogether.SafeToNumber
+					and QuestTogether:SafeToNumber(rawValue)
+					or nil
+				if numericFlag ~= nil then
+					return numericFlag ~= 0
+				end
+				return nil
+			end
+
+			local function BuildSanitizedQuestLogInfo(titleValue, isHeaderValue, isHiddenValue, isTaskValue, isOnMapValue, hasLocalPOIValue, isCompleteValue, questIDValue)
+				local titleIsSecret = QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(titleValue)
+				local sanitizedInfo = {
+					title = (type(titleValue) == "string" and not titleIsSecret) and titleValue or nil,
+					isHeader = NormalizeQuestInfoFlag(isHeaderValue) == true,
+					isHidden = NormalizeQuestInfoFlag(isHiddenValue) == true,
+					isTask = NormalizeQuestInfoFlag(isTaskValue) == true,
+					isOnMap = NormalizeQuestInfoFlag(isOnMapValue) == true,
+					hasLocalPOI = NormalizeQuestInfoFlag(hasLocalPOIValue) == true,
+					isComplete = NormalizeQuestInfoFlag(isCompleteValue) == true,
+				}
+
+				local numericQuestID = QuestTogether and QuestTogether.SafeToNumber
+					and QuestTogether:SafeToNumber(questIDValue)
+					or nil
+				if (not numericQuestID or numericQuestID <= 0) and C_QuestLog and C_QuestLog.GetQuestIDForLogIndex then
+					local okQuestId, questIDFromIndex = pcall(C_QuestLog.GetQuestIDForLogIndex, numericQuestLogIndex)
+					if okQuestId and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questIDFromIndex)) then
+						numericQuestID = QuestTogether and QuestTogether.SafeToNumber
+							and QuestTogether:SafeToNumber(questIDFromIndex)
+							or nil
+					end
+				end
+				if numericQuestID and numericQuestID > 0 then
+					sanitizedInfo.questID = math.floor(numericQuestID + 0.5)
+				end
+
+				return sanitizedInfo
+			end
+
+			if type(GetQuestLogTitle) == "function" then
+				local okTitle, title, _, _, isHeader, _, isComplete, _, questID, _, _, isOnMap, hasLocalPOI, isTask, _, _, isHidden =
+					pcall(GetQuestLogTitle, numericQuestLogIndex)
+				if okTitle then
+					return BuildSanitizedQuestLogInfo(
+						title,
+						isHeader,
+						isHidden,
+						isTask,
+						isOnMap,
+						hasLocalPOI,
+						isComplete,
+						questID
+					)
+				end
+			end
+
 			if C_QuestLog and C_QuestLog.GetInfo then
 				local ok, questInfo = pcall(C_QuestLog.GetInfo, numericQuestLogIndex)
 				if not ok then
@@ -1146,58 +1209,26 @@ QuestTogether.API = QuestTogether.API or {
 					return nil
 				end
 
-					local function NormalizeQuestInfoFlag(rawValue)
-						if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
-							return nil
-						end
-						if type(rawValue) == "boolean" then
-							return rawValue
-						end
-						local numericFlag = QuestTogether and QuestTogether.SafeToNumber
-							and QuestTogether:SafeToNumber(rawValue)
-							or nil
-						if numericFlag ~= nil then
-							return numericFlag ~= 0
-						end
-						return nil
-					end
+				-- Keep quest-log snapshots to a strict scalar allowlist.
+				-- Broadly copying the C_QuestLog info table can carry secure/forbidden references
+				-- that later taint Blizzard map pin update paths.
+				local sanitizedInfo = BuildSanitizedQuestLogInfo(
+					questInfo.title,
+					questInfo.isHeader,
+					questInfo.isHidden,
+					questInfo.isTask,
+					questInfo.isOnMap,
+					questInfo.hasLocalPOI,
+					questInfo.isComplete,
+					questInfo.questID
+				)
 
-					-- Keep quest-log snapshots to a strict scalar allowlist.
-					-- Broadly copying the C_QuestLog info table can carry secure/forbidden references
-					-- that later taint Blizzard map pin update paths.
-					local titleValue = questInfo.title
-					local titleIsSecret = QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(titleValue)
-					local sanitizedInfo = {
-						title = (type(titleValue) == "string" and not titleIsSecret) and titleValue or nil,
-						isHeader = NormalizeQuestInfoFlag(questInfo.isHeader) == true,
-						isHidden = NormalizeQuestInfoFlag(questInfo.isHidden) == true,
-						isTask = NormalizeQuestInfoFlag(questInfo.isTask) == true,
-						isOnMap = NormalizeQuestInfoFlag(questInfo.isOnMap) == true,
-						hasLocalPOI = NormalizeQuestInfoFlag(questInfo.hasLocalPOI) == true,
-						isComplete = NormalizeQuestInfoFlag(questInfo.isComplete) == true,
-					}
-
-					-- Preserve unknown world-quest classification as nil so snapshot code can fall
-					-- back to C_QuestLog.IsWorldQuest(questID).
-					local normalizedIsWorldQuest = NormalizeQuestInfoFlag(questInfo.isWorldQuest)
-					if normalizedIsWorldQuest ~= nil then
-						sanitizedInfo.isWorldQuest = normalizedIsWorldQuest
-					end
-
-					local numericQuestID = QuestTogether and QuestTogether.SafeToNumber
-						and QuestTogether:SafeToNumber(questInfo.questID)
-						or nil
-					if (not numericQuestID or numericQuestID <= 0) and C_QuestLog and C_QuestLog.GetQuestIDForLogIndex then
-						local okQuestId, questIDFromIndex = pcall(C_QuestLog.GetQuestIDForLogIndex, numericQuestLogIndex)
-						if okQuestId and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questIDFromIndex)) then
-							numericQuestID = QuestTogether and QuestTogether.SafeToNumber
-								and QuestTogether:SafeToNumber(questIDFromIndex)
-								or nil
-						end
-					end
-					if numericQuestID and numericQuestID > 0 then
-						sanitizedInfo.questID = math.floor(numericQuestID + 0.5)
-					end
+				-- Preserve unknown world-quest classification as nil so snapshot code can fall
+				-- back to C_QuestLog.IsWorldQuest(questID).
+				local normalizedIsWorldQuest = NormalizeQuestInfoFlag(questInfo.isWorldQuest)
+				if normalizedIsWorldQuest ~= nil then
+					sanitizedInfo.isWorldQuest = normalizedIsWorldQuest
+				end
 
 				return sanitizedInfo
 			end

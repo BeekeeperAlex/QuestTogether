@@ -69,6 +69,17 @@ local function IsNonEmptyString(value)
 	return type(value) == "string" and value ~= ""
 end
 
+local function ShouldSuppressStructuredQuestTooltipSource(addon)
+	if not addon or not addon.CanUseStructuredQuestTooltipAPI then
+		return false
+	end
+
+	-- On mainline clients the shared C_TooltipInfo quest path can taint Blizzard's
+	-- world-map quest progress-bar tooltips. Keep using addon-owned Questie data when
+	-- available, but suppress Blizzard's structured tooltip source there.
+	return addon:CanUseStructuredQuestTooltipAPI()
+end
+
 local function IsFrameForbidden(frame)
 	if QuestTogether and QuestTogether.IsForbiddenFrame then
 		return QuestTogether:IsForbiddenFrame(frame)
@@ -1681,6 +1692,10 @@ end
 -- Structured Blizzard tooltip data is Plater's second source on retail/mainline
 -- in local retail Plater.lua:11208-11218 after Questie.
 function QuestTogether:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid)
+	if ShouldSuppressStructuredQuestTooltipSource(self) then
+		return nil
+	end
+
 	if type(unitGuid) ~= "string" or unitGuid == "" then
 		return nil
 	end
@@ -1741,7 +1756,7 @@ function QuestTogether:GetQuestObjectiveTooltipLines(unitToken, unitGuid)
 		return structuredTooltipLines
 	end
 
-	if self:CanUseStructuredQuestTooltipAPI() then
+	if not self:IsNameplateTooltipScanEnabled() then
 		return nil
 	end
 
@@ -1879,19 +1894,18 @@ function QuestTogether:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
 end
 
 function QuestTogether:IsNameplateTooltipScanEnabled()
-	-- On retail clients Plater stops after C_TooltipInfo (Plater.lua:11208-11218),
-	-- so the legacy hidden-tooltip path is disabled whenever structured tooltip APIs exist.
-	-- The hidden fallback remains enabled only for the non-mainline branch
-	-- mirrored from Plater.lua:11219-11226.
-	if self:CanUseStructuredQuestTooltipAPI() then
-		return false
-	end
+	-- QuestTogether keeps the addon-owned hidden tooltip scan available as a final
+	-- fallback even on mainline because Blizzard's structured unit-tooltip path is
+	-- suppressed for map safety. TryEvaluateQuestObjectiveViaTooltip() already bails
+	-- before any live tooltip read while the world map widgets are active.
 	return DEFAULT_ENABLE_TOOLTIP_QUEST_SCAN_FALLBACK
 end
 
 -- Mirrors the client-specific source order in Plater.IsQuestObjective:
 -- retail/mainline uses Questie -> C_TooltipInfo (Plater.lua:11200-11218),
 -- while legacy clients use Questie -> hidden GameTooltip (Plater.lua:11219-11226).
+-- QuestTogether suppresses the structured Blizzard source on mainline for map safety,
+-- so the addon-owned hidden tooltip remains the final live fallback after Questie.
 -- Plater does not special-case world-map visibility here, but QuestTogether has to.
 -- On the default UI, live unit-tooltip reads while AreaPOI/GameTooltip widget sets are
 -- active can taint Blizzard's shared world-map tooltip/widget path, so the tooltip
@@ -3039,6 +3053,13 @@ function QuestTogether:ScheduleNameplateHealthTintRefresh(unitToken, delaySecond
 		if not self.isEnabled or not self.API or type(self.API.GetNamePlateForUnit) ~= "function" then
 			return
 		end
+		if self:IsWorldMapVisibleForNameplateRefresh() then
+			self:ScheduleDeferredNameplateQuestStateRefresh(
+				"NameplateHealthTintRefreshWorldMapVisible",
+				NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
+			)
+			return
+		end
 
 		local namePlateFrameBase, unitFrame = self:GetAccessibleNameplateFrameForUnit(unitToken, true)
 		if not namePlateFrameBase or not unitFrame then
@@ -3057,22 +3078,14 @@ function QuestTogether:ScheduleNameplateHealthTintRefresh(unitToken, delaySecond
 				self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
 			end
 
-			local allowLiveScan = not self:IsWorldMapVisibleForNameplateRefresh()
 			local hasResolvedQuestState, isQuestObjective = self:TryResolveNameplateQuestObjectiveState(
 				liveUnitToken,
 				unitFrame,
-				allowLiveScan
+				true
 			)
 			if not hasResolvedQuestState then
-				if not allowLiveScan then
-					self:ScheduleDeferredNameplateQuestStateRefresh(
-						"NameplateHealthTintRefreshWorldMapVisible",
-						NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
-					)
-				else
-					self:ForgetResolvedNameplateQuestState(liveUnitToken)
-					self:RestoreNameplateHealthColor(unitFrame)
-				end
+				self:ForgetResolvedNameplateQuestState(liveUnitToken)
+				self:RestoreNameplateHealthColor(unitFrame)
 				return
 			end
 
@@ -3131,25 +3144,24 @@ function QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 	if IsFrameForbidden(namePlateFrameBase) or IsFrameForbidden(namePlateFrameBase.UnitFrame) then
 		return
 	end
+	if self:IsWorldMapVisibleForNameplateRefresh() then
+		self:ScheduleDeferredNameplateQuestStateRefresh(
+			"RefreshNameplateIconWorldMapVisible",
+			NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
+		)
+		return
+	end
 
 	local unitFrame = namePlateFrameBase.UnitFrame
 	local unitToken = ResolveNameplateUnitToken(namePlateFrameBase, unitFrame)
-	local allowLiveScan = not self:IsWorldMapVisibleForNameplateRefresh()
 	local hasResolvedQuestState, isQuestObjective, resolvedUnitGuid = self:TryResolveNameplateQuestObjectiveState(
 		unitToken,
 		unitFrame,
-		allowLiveScan
+		true
 	)
 	if not hasResolvedQuestState then
-		if not allowLiveScan then
-			self:ScheduleDeferredNameplateQuestStateRefresh(
-				"RefreshNameplateIconWorldMapVisible",
-				NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
-			)
-		else
-			self:ForgetResolvedNameplateQuestState(unitToken)
-			self:HideNameplateIcon(namePlateFrameBase)
-		end
+		self:ForgetResolvedNameplateQuestState(unitToken)
+		self:HideNameplateIcon(namePlateFrameBase)
 		return
 	end
 
@@ -3158,7 +3170,7 @@ function QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 		unitToken,
 		unitFrame,
 		isQuestObjective,
-		allowLiveScan,
+		true,
 		resolvedUnitGuid
 	)
 end
@@ -3314,6 +3326,13 @@ function QuestTogether:RefreshNameplateAugmentation()
 			self:HideNameplateIcon(frame)
 		end)
 		self:RefreshActiveAnnouncementBubbles()
+		return
+	end
+	if self:IsWorldMapVisibleForNameplateRefresh() then
+		self:ScheduleDeferredNameplateQuestStateRefresh(
+			"RefreshNameplateAugmentationWorldMapVisible",
+			NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
+		)
 		return
 	end
 
@@ -3500,7 +3519,22 @@ function QuestTogether:OnNameplateAdded(unitToken)
 		-- Nameplate frames are recycled. Clear any stale icon/tint immediately so visuals
 		-- from a previous unit cannot carry over before the live refresh resolves.
 		self:HideNameplateIcon(namePlateFrameBase)
+		if self:IsWorldMapVisibleForNameplateRefresh() then
+			self:ScheduleDeferredNameplateQuestStateRefresh(
+				"OnNameplateAddedWorldMapVisible",
+				NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
+			)
+			return
+		end
 		self:RefreshNameplateIcon(namePlateFrameBase)
+		return
+	end
+
+	if self:IsWorldMapVisibleForNameplateRefresh() then
+		self:ScheduleDeferredNameplateQuestStateRefresh(
+			"OnNameplateAddedWorldMapVisible",
+			NAMEPLATE_WORLD_MAP_REFRESH_DELAY_SECONDS
+		)
 		return
 	end
 
