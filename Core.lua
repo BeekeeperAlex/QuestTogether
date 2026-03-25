@@ -23,6 +23,169 @@ local raw_string_match = string.match
 local raw_string_find = string.find
 local raw_issecretvalue = type(issecretvalue) == "function" and issecretvalue or nil
 
+local function CanUseQuestLogFallbacks()
+	if not QuestTogether then
+		return true
+	end
+
+	if QuestTogether.IsWorkBlocked and QuestTogether:IsWorkBlocked("quest_snapshot_refresh") then
+		return false
+	end
+
+	return true
+end
+
+local function SanitizeQuestTagInfo(rawTagInfo)
+	if type(rawTagInfo) ~= "table" then
+		return nil
+	end
+
+	local tagInfo = {}
+	local tagID = nil
+	local worldQuestType = nil
+	if QuestTogether and QuestTogether.SafeToNumber then
+		if not (QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawTagInfo.tagID)) then
+			tagID = QuestTogether:SafeToNumber(rawTagInfo.tagID)
+		end
+		if not (QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawTagInfo.worldQuestType)) then
+			worldQuestType = QuestTogether:SafeToNumber(rawTagInfo.worldQuestType)
+		end
+	end
+	if tagID ~= nil then
+		tagInfo.tagID = math.floor(tagID + 0.5)
+	end
+	if worldQuestType ~= nil then
+		tagInfo.worldQuestType = math.floor(worldQuestType + 0.5)
+	end
+	if next(tagInfo) == nil then
+		return nil
+	end
+
+	return tagInfo
+end
+
+local function NormalizeQuestInfoFlagValue(rawValue)
+	if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
+		return nil
+	end
+	if type(rawValue) == "boolean" then
+		return rawValue
+	end
+	local numericFlag = QuestTogether and QuestTogether.SafeToNumber
+		and QuestTogether:SafeToNumber(rawValue)
+		or nil
+	if numericFlag ~= nil then
+		return numericFlag ~= 0
+	end
+	return nil
+end
+
+local function BuildSanitizedQuestLogInfoRecord(questLogIndex, titleValue, isHeaderValue, isHiddenValue, isTaskValue, isOnMapValue, hasLocalPOIValue, isCompleteValue, questIDValue, displayQuestIDValue, isWorldQuestValue)
+	local numericQuestLogIndex = QuestTogether and QuestTogether.SafeToNumber
+		and QuestTogether:SafeToNumber(questLogIndex)
+		or nil
+	if not numericQuestLogIndex or numericQuestLogIndex <= 0 then
+		return nil
+	end
+
+	local titleIsSecret = QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(titleValue)
+	local sanitizedInfo = {
+		title = (type(titleValue) == "string" and not titleIsSecret) and titleValue or nil,
+		questLogIndex = math.floor(numericQuestLogIndex + 0.5),
+		isHeader = NormalizeQuestInfoFlagValue(isHeaderValue) == true,
+		isHidden = NormalizeQuestInfoFlagValue(isHiddenValue) == true,
+		isTask = NormalizeQuestInfoFlagValue(isTaskValue) == true,
+		isOnMap = NormalizeQuestInfoFlagValue(isOnMapValue) == true,
+		hasLocalPOI = NormalizeQuestInfoFlagValue(hasLocalPOIValue) == true,
+		isComplete = NormalizeQuestInfoFlagValue(isCompleteValue) == true,
+	}
+
+	local numericQuestID = QuestTogether and QuestTogether.SafeToNumber
+		and QuestTogether:SafeToNumber(questIDValue)
+		or nil
+	if not numericQuestID or numericQuestID <= 0 then
+		numericQuestID = QuestTogether and QuestTogether.SafeToNumber
+			and QuestTogether:SafeToNumber(displayQuestIDValue)
+			or nil
+	end
+	if numericQuestID and numericQuestID > 0 then
+		sanitizedInfo.questID = math.floor(numericQuestID + 0.5)
+	end
+
+	local normalizedIsWorldQuest = NormalizeQuestInfoFlagValue(isWorldQuestValue)
+	if normalizedIsWorldQuest ~= nil then
+		sanitizedInfo.isWorldQuest = normalizedIsWorldQuest
+	end
+
+	return sanitizedInfo
+end
+
+local function BuildSanitizedQuestLogInfoFromRawInfo(questLogIndex, rawInfo)
+	if type(rawInfo) ~= "table" then
+		return nil
+	end
+
+	return BuildSanitizedQuestLogInfoRecord(
+		questLogIndex,
+		rawInfo.title,
+		rawInfo.isHeader,
+		rawInfo.isHidden,
+		rawInfo.isTask,
+		rawInfo.isOnMap,
+		rawInfo.hasLocalPOI,
+		rawInfo.isComplete,
+		rawInfo.questID,
+		rawInfo.displayQuestID,
+		rawInfo.isWorldQuest
+	)
+end
+
+local function GetSnapshotBuilderQuestLogInfo(questLogIndex)
+	local numericQuestLogIndex = QuestTogether and QuestTogether.SafeToNumber
+		and QuestTogether:SafeToNumber(questLogIndex)
+		or nil
+	if not numericQuestLogIndex or numericQuestLogIndex <= 0 then
+		return nil
+	end
+	numericQuestLogIndex = math.floor(numericQuestLogIndex + 0.5)
+
+	local questInfo = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestLogInfo
+		and QuestTogether.API.GetQuestLogInfo(numericQuestLogIndex)
+		or nil
+	return questInfo
+end
+
+local function GetLiveQuestTagInfo(questID)
+	if not (C_QuestLog and C_QuestLog.GetQuestTagInfo and CanUseQuestLogFallbacks()) then
+		return nil
+	end
+
+	local ok, rawTagInfo = pcall(C_QuestLog.GetQuestTagInfo, questID)
+	if not ok then
+		return nil
+	end
+
+	return SanitizeQuestTagInfo(rawTagInfo)
+end
+
+local function GetLiveQuestDetailsThemePoiIcon(questID)
+	if not (C_QuestLog and C_QuestLog.GetQuestDetailsTheme and CanUseQuestLogFallbacks()) then
+		return nil
+	end
+
+	local ok, theme = pcall(C_QuestLog.GetQuestDetailsTheme, questID)
+	if not ok or type(theme) ~= "table" then
+		return nil
+	end
+
+	local poiIcon = theme.poiIcon
+	if type(poiIcon) ~= "string" or poiIcon == "" then
+		return nil
+	end
+
+	return poiIcon
+end
+
 local function SafeText(value, fallback)
 	if QuestTogether and QuestTogether.SafeToString then
 		return QuestTogether:SafeToString(value, fallback ~= nil and fallback or "<secret>")
@@ -725,42 +888,40 @@ QuestTogether.API = QuestTogether.API or {
 			if not numericQuestID then
 				return nil
 			end
-			if type(GetNumQuestLogEntries) == "function" and type(GetQuestLogTitle) == "function" then
-				local okCount, count = pcall(GetNumQuestLogEntries)
-				if okCount and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(count)) then
-					local numericCount = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(count) or nil
-					if numericCount and numericCount > 0 then
-						numericCount = math.floor(numericCount + 0.5)
-						for questLogIndex = 1, numericCount do
-							local okTitle, _, _, _, _, _, _, _, entryQuestID = pcall(GetQuestLogTitle, questLogIndex)
-							if okTitle then
-								local normalizedEntryQuestID = QuestTogether
-									and QuestTogether.NormalizeQuestID
-									and QuestTogether:NormalizeQuestID(entryQuestID)
-									or nil
-								if normalizedEntryQuestID == numericQuestID then
-									return questLogIndex
-								end
-							end
-						end
-					end
+			local snapshotState = QuestTogether
+				and QuestTogether.GetQuestSnapshotStateStore
+				and QuestTogether:GetQuestSnapshotStateStore()
+				or nil
+			local snapshotByQuestID = snapshotState and snapshotState.byQuestID or nil
+			local snapshot = snapshotByQuestID and snapshotByQuestID[numericQuestID] or nil
+			if type(snapshot) == "table" then
+				local snapshotQuestLogIndex = QuestTogether
+					and QuestTogether.SafeToNumber
+					and QuestTogether:SafeToNumber(snapshot.questLogIndex)
+					or nil
+				if snapshotQuestLogIndex and snapshotQuestLogIndex > 0 then
+					return math.floor(snapshotQuestLogIndex + 0.5)
 				end
 			end
-			if C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
-				local ok, questLogIndex = pcall(C_QuestLog.GetLogIndexForQuestID, numericQuestID)
-				if not ok then
-					return nil
+			local numericCount = QuestTogether and QuestTogether.API and QuestTogether.API.GetNumQuestLogEntries
+				and QuestTogether.API.GetNumQuestLogEntries()
+				or 0
+			numericCount = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(numericCount) or nil
+			if numericCount and numericCount > 0 then
+				numericCount = math.floor(numericCount + 0.5)
+				for questLogIndex = 1, numericCount do
+					local entryInfo = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestLogInfo
+						and QuestTogether.API.GetQuestLogInfo(questLogIndex)
+						or nil
+					local normalizedEntryQuestID = entryInfo
+						and QuestTogether
+						and QuestTogether.NormalizeQuestID
+						and QuestTogether:NormalizeQuestID(entryInfo.questID)
+						or nil
+					if normalizedEntryQuestID == numericQuestID then
+						return questLogIndex
+					end
 				end
-				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questLogIndex) then
-					return nil
-				end
-				local numericQuestLogIndex = QuestTogether and QuestTogether.SafeToNumber
-					and QuestTogether:SafeToNumber(questLogIndex)
-					or nil
-				if numericQuestLogIndex == nil or numericQuestLogIndex <= 0 then
-					return nil
-				end
-				return math.floor(numericQuestLogIndex + 0.5)
 			end
 			return nil
 		end,
@@ -1176,106 +1337,37 @@ QuestTogether.API = QuestTogether.API or {
 				return nil
 			end
 
-			local function NormalizeQuestInfoFlag(rawValue)
-				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
-					return nil
-				end
-				if type(rawValue) == "boolean" then
-					return rawValue
-				end
-				local numericFlag = QuestTogether and QuestTogether.SafeToNumber
-					and QuestTogether:SafeToNumber(rawValue)
-					or nil
-				if numericFlag ~= nil then
-					return numericFlag ~= 0
-				end
-				return nil
-			end
-
-			local function BuildSanitizedQuestLogInfo(titleValue, isHeaderValue, isHiddenValue, isTaskValue, isOnMapValue, hasLocalPOIValue, isCompleteValue, questIDValue)
-				local titleIsSecret = QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(titleValue)
-				local sanitizedInfo = {
-					title = (type(titleValue) == "string" and not titleIsSecret) and titleValue or nil,
-					questLogIndex = numericQuestLogIndex,
-					isHeader = NormalizeQuestInfoFlag(isHeaderValue) == true,
-					isHidden = NormalizeQuestInfoFlag(isHiddenValue) == true,
-					isTask = NormalizeQuestInfoFlag(isTaskValue) == true,
-					isOnMap = NormalizeQuestInfoFlag(isOnMapValue) == true,
-					hasLocalPOI = NormalizeQuestInfoFlag(hasLocalPOIValue) == true,
-					isComplete = NormalizeQuestInfoFlag(isCompleteValue) == true,
-				}
-
-				local numericQuestID = QuestTogether and QuestTogether.SafeToNumber
-					and QuestTogether:SafeToNumber(questIDValue)
-					or nil
-				if (not numericQuestID or numericQuestID <= 0) and C_QuestLog and C_QuestLog.GetQuestIDForLogIndex then
-					local okQuestId, questIDFromIndex = pcall(C_QuestLog.GetQuestIDForLogIndex, numericQuestLogIndex)
-					if okQuestId and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questIDFromIndex)) then
-						numericQuestID = QuestTogether and QuestTogether.SafeToNumber
-							and QuestTogether:SafeToNumber(questIDFromIndex)
-							or nil
+			if C_QuestLog and C_QuestLog.GetInfo then
+				local okInfo, rawInfo = pcall(C_QuestLog.GetInfo, numericQuestLogIndex)
+				if okInfo then
+					local sanitizedInfo = BuildSanitizedQuestLogInfoFromRawInfo(numericQuestLogIndex, rawInfo)
+					if sanitizedInfo then
+						return sanitizedInfo
 					end
 				end
-				if numericQuestID and numericQuestID > 0 then
-					sanitizedInfo.questID = math.floor(numericQuestID + 0.5)
-				end
-
-				return sanitizedInfo
 			end
 
+			local titleInfo = nil
 			if type(GetQuestLogTitle) == "function" then
-				local okTitle, title, _, _, isHeader, _, isComplete, _, questID, _, _, isOnMap, hasLocalPOI, isTask, _, _, isHidden =
+				local okTitle, title, _, _, isHeader, _, isComplete, _, questID, _, displayQuestID, isOnMap, hasLocalPOI, isTask, _ =
 					pcall(GetQuestLogTitle, numericQuestLogIndex)
 				if okTitle then
-					return BuildSanitizedQuestLogInfo(
+					titleInfo = BuildSanitizedQuestLogInfoRecord(
+						numericQuestLogIndex,
 						title,
 						isHeader,
-						isHidden,
+						nil,
 						isTask,
 						isOnMap,
 						hasLocalPOI,
 						isComplete,
-						questID
+						questID,
+						displayQuestID,
+						nil
 					)
 				end
 			end
-
-			if C_QuestLog and C_QuestLog.GetInfo then
-				local ok, questInfo = pcall(C_QuestLog.GetInfo, numericQuestLogIndex)
-				if not ok then
-					return nil
-				end
-				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questInfo) then
-					return nil
-				end
-				if type(questInfo) ~= "table" then
-					return nil
-				end
-
-				-- Keep quest-log snapshots to a strict scalar allowlist.
-				-- Broadly copying the C_QuestLog info table can carry secure/forbidden references
-				-- that later taint Blizzard map pin update paths.
-				local sanitizedInfo = BuildSanitizedQuestLogInfo(
-					questInfo.title,
-					questInfo.isHeader,
-					questInfo.isHidden,
-					questInfo.isTask,
-					questInfo.isOnMap,
-					questInfo.hasLocalPOI,
-					questInfo.isComplete,
-					questInfo.questID
-				)
-
-				-- Preserve unknown world-quest classification as nil so snapshot code can fall
-				-- back to C_QuestLog.IsWorldQuest(questID).
-				local normalizedIsWorldQuest = NormalizeQuestInfoFlag(questInfo.isWorldQuest)
-				if normalizedIsWorldQuest ~= nil then
-					sanitizedInfo.isWorldQuest = normalizedIsWorldQuest
-				end
-
-				return sanitizedInfo
-			end
-			return nil
+			return titleInfo
 		end,
 		GetNumQuestLeaderBoards = function(questLogIndex)
 			if InCombatLockdown and InCombatLockdown() then
@@ -2660,39 +2752,134 @@ function QuestTogether:NormalizeAnnouncementWarModeValue(warMode)
 	return nil
 end
 
+function QuestTogether:RebuildQuestSnapshotStore()
+	local snapshotState = self.GetQuestSnapshotStateStore and self:GetQuestSnapshotStateStore() or nil
+	if type(snapshotState) ~= "table" then
+		return nil
+	end
+
+	local snapshotByQuestID = snapshotState.byQuestID or {}
+	local snapshotOrder = snapshotState.order or {}
+	wipe(snapshotByQuestID)
+	wipe(snapshotOrder)
+
+	local totalEntries = self.API and self.API.GetNumQuestLogEntries and self.API.GetNumQuestLogEntries() or 0
+	totalEntries = self:SafeToNumber(totalEntries) or 0
+	totalEntries = math.max(0, math.floor(totalEntries + 0.5))
+	local sampleRows = {}
+
+	for questLogIndex = 1, totalEntries do
+		local questInfo = GetSnapshotBuilderQuestLogInfo(questLogIndex)
+		if questLogIndex <= 5 then
+			sampleRows[#sampleRows + 1] = {
+				index = questLogIndex,
+				title = questInfo and questInfo.title or nil,
+				isHeader = questInfo and questInfo.isHeader == true or false,
+				questID = questInfo and questInfo.questID or nil,
+				isTask = questInfo and questInfo.isTask == true or false,
+				isOnMap = questInfo and questInfo.isOnMap == true or false,
+				hasLocalPOI = questInfo and questInfo.hasLocalPOI == true or false,
+			}
+		end
+		if questInfo and questInfo.isHeader ~= true then
+			local numericQuestID = self:NormalizeQuestID(questInfo.questID)
+			if numericQuestID then
+				local isWorldQuest = questInfo.isWorldQuest == true
+				local isTaskQuest = questInfo.isTask == true or isWorldQuest == true
+
+				local snapshot = {
+					questID = numericQuestID,
+					questLogIndex = self:SafeToNumber(questInfo.questLogIndex) or questLogIndex,
+					title = type(questInfo.title) == "string" and questInfo.title or nil,
+					isHidden = questInfo.isHidden == true,
+					isTask = isTaskQuest and true or false,
+					isOnMap = questInfo.isOnMap == true,
+					hasLocalPOI = questInfo.hasLocalPOI == true,
+					isComplete = questInfo.isComplete == true,
+					isWorldQuest = isWorldQuest and true or false,
+					isBonusObjective = isTaskQuest == true and isWorldQuest ~= true,
+					tagInfo = nil,
+					poiIcon = nil,
+				}
+				snapshot.taskAnnouncementType = snapshot.isWorldQuest and "world"
+					or (snapshot.isBonusObjective and "bonus" or nil)
+
+				snapshotByQuestID[numericQuestID] = snapshot
+				snapshotOrder[#snapshotOrder + 1] = numericQuestID
+			end
+		end
+	end
+
+	snapshotState.byQuestID = snapshotByQuestID
+	snapshotState.order = snapshotOrder
+	snapshotState.generation = (snapshotState.generation or 0) + 1
+	if self.SyncLegacyRuntimeStateAliases then
+		self:SyncLegacyRuntimeStateAliases()
+	end
+
+	if totalEntries > 0 and #snapshotOrder == 0 and not snapshotState.didLogEmptyBuildDiagnostics then
+		snapshotState.didLogEmptyBuildDiagnostics = true
+		local sampleParts = {}
+		for index = 1, #sampleRows do
+			local row = sampleRows[index]
+			sampleParts[#sampleParts + 1] = string.format(
+				"#%d title=%s header=%s questID=%s task=%s onMap=%s poi=%s",
+				row.index,
+				self:SafeToString(row.title, "<nil>"),
+				tostring(row.isHeader),
+				self:SafeToString(row.questID, "<nil>"),
+				tostring(row.isTask),
+				tostring(row.isOnMap),
+				tostring(row.hasLocalPOI)
+			)
+		end
+		self:Print(
+			"QuestTogether debug: empty quest snapshot. totalEntries="
+				.. tostring(totalEntries)
+				.. " samples: "
+				.. table.concat(sampleParts, " | ")
+		)
+	elseif #snapshotOrder > 0 then
+		snapshotState.didLogEmptyBuildDiagnostics = false
+	end
+
+	return snapshotState
+end
+
+function QuestTogether:EnsureQuestSnapshotStore()
+	local snapshotState = self.GetQuestSnapshotStateStore and self:GetQuestSnapshotStateStore() or nil
+	if type(snapshotState) ~= "table" then
+		return nil
+	end
+	if type(snapshotState.byQuestID) ~= "table" or next(snapshotState.byQuestID) == nil then
+		if self.IsWorkBlocked and self:IsWorkBlocked("quest_snapshot_refresh") then
+			return snapshotState
+		end
+		return self:RebuildQuestSnapshotStore()
+	end
+	return snapshotState
+end
+
 function QuestTogether:GetQuestTagInfo(questId)
-	local numericQuestId = self:SafeToNumber(questId)
-	if not numericQuestId or not C_QuestLog or not C_QuestLog.GetQuestTagInfo then
-		return nil
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
 	end
-
-	-- Blizzard quest metadata calls can throw on stale quest IDs.
-	local ok, tagInfo = pcall(C_QuestLog.GetQuestTagInfo, numericQuestId)
-	if not ok or type(tagInfo) ~= "table" then
-		return nil
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(questId) or nil
+	if snapshot and type(snapshot.tagInfo) == "table" then
+		return snapshot.tagInfo
 	end
-
-	return tagInfo
+	return nil
 end
 
 function QuestTogether:GetQuestDetailsThemePoiIcon(questId)
-	local numericQuestId = self:SafeToNumber(questId)
-	if not numericQuestId or not C_QuestLog or not C_QuestLog.GetQuestDetailsTheme then
-		return nil
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
 	end
-
-	-- Blizzard quest metadata calls can throw on stale quest IDs.
-	local ok, theme = pcall(C_QuestLog.GetQuestDetailsTheme, numericQuestId)
-	if not ok or type(theme) ~= "table" then
-		return nil
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(questId) or nil
+	if snapshot and type(snapshot.poiIcon) == "string" and snapshot.poiIcon ~= "" then
+		return snapshot.poiIcon
 	end
-
-	local poiIcon = theme.poiIcon
-	if type(poiIcon) ~= "string" or poiIcon == "" then
-		return nil
-	end
-
-	return poiIcon
+	return nil
 end
 
 function QuestTogether:GetQuestTagAtlas(tagID, worldQuestType)
@@ -2725,35 +2912,12 @@ function QuestTogether:GetWorldQuestAtlasInfo(questId, tagInfo, inProgress)
 end
 
 function QuestTogether:GetQuestStateAnnouncementIconInfo(eventType, questId)
-	local numericQuestId = self:SafeToNumber(questId)
-	if not numericQuestId or not QuestUtil then
+	local texturePath = self.NAMEPLATE_QUEST_ICON_TEXTURE
+	if type(texturePath) ~= "string" or texturePath == "" then
 		return nil, nil
 	end
 
-	local asset = nil
-	local isAtlas = nil
-	if eventType == "QUEST_ACCEPTED" and QuestUtil.GetQuestIconOfferForQuestID then
-		asset, isAtlas = QuestUtil.GetQuestIconOfferForQuestID(numericQuestId)
-	elseif
-		(
-			eventType == "QUEST_PROGRESS"
-			or eventType == "QUEST_REMOVED"
-			or eventType == "QUEST_COMPLETED"
-			or eventType == "QUEST_READY_TO_TURN_IN"
-		)
-		and QuestUtil.GetQuestIconActiveForQuestID
-	then
-		asset, isAtlas = QuestUtil.GetQuestIconActiveForQuestID(
-			numericQuestId,
-			eventType == "QUEST_COMPLETED" or eventType == "QUEST_READY_TO_TURN_IN"
-		)
-	end
-
-	if type(asset) ~= "string" or asset == "" then
-		return nil, nil
-	end
-
-	return asset, isAtlas and "atlas" or "texture"
+	return texturePath, "texture"
 end
 
 function QuestTogether:GetWorldQuestAnnouncementIconInfo(questId)
@@ -2807,9 +2971,11 @@ function QuestTogether:GetBonusObjectiveAnnouncementIconInfo(eventType, questId)
 		questStateEventType = "QUEST_COMPLETED"
 	end
 
-	local asset, kind = self:GetQuestStateAnnouncementIconInfo(questStateEventType, numericQuestId)
-	if asset and kind then
-		return asset, kind
+	if numericQuestId then
+		local asset, kind = self:GetQuestStateAnnouncementIconInfo(questStateEventType, numericQuestId)
+		if asset and kind then
+			return asset, kind
+		end
 	end
 
 	return "Bonus-Objective-Star", "atlas"
@@ -2988,6 +3154,29 @@ function QuestTogether:GetQuestStatusLabel(questId)
 	local numericQuestId = self:SafeToNumber(questId)
 	if not numericQuestId then
 		return "Unknown"
+	end
+
+	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
+	local trackedQuest = tracker and tracker[numericQuestId] or nil
+	if type(trackedQuest) == "table" then
+		if trackedQuest.isReadyForTurnIn == true then
+			return "Ready to Turn In"
+		end
+		if trackedQuest.isComplete == true then
+			return "Objectives Complete"
+		end
+		return "In Progress"
+	end
+
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
+	end
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(numericQuestId) or nil
+	if type(snapshot) == "table" then
+		if snapshot.isComplete == true then
+			return "Objectives Complete"
+		end
+		return "In Progress"
 	end
 
 	if self.API and self.API.IsQuestFlaggedCompleted and self.API.IsQuestFlaggedCompleted(numericQuestId) then
@@ -3706,49 +3895,18 @@ function QuestTogether:IsWorldQuest(questId)
 		return false
 	end
 
-	if C_QuestLog and C_QuestLog.IsWorldQuest then
-		-- Quest APIs may throw on IDs that disappear mid-update; treat as false.
-		local ok, isWorldQuest = pcall(C_QuestLog.IsWorldQuest, numericQuestId)
-		if ok then
-			if self:IsSecretValue(isWorldQuest) then
-				isWorldQuest = nil
-			end
-			if type(isWorldQuest) == "boolean" then
-				if isWorldQuest then
-					return true
-				end
-			else
-				local worldFlag = self:SafeToNumber(isWorldQuest)
-				if worldFlag ~= nil and worldFlag ~= 0 then
-					return true
-				end
-			end
-		end
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
+	end
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(numericQuestId) or nil
+	if snapshot and snapshot.isWorldQuest ~= nil then
+		return snapshot.isWorldQuest == true
 	end
 
-	-- Some task quest variants do not reliably flag IsWorldQuest, but they expose
-	-- world-quest metadata through quest tags.
-	local tagInfo = self:GetQuestTagInfo(numericQuestId)
-	if type(tagInfo) ~= "table" then
-		return false
-	end
-
-	local worldQuestType = nil
-	if not self:IsSecretValue(tagInfo.worldQuestType) then
-		worldQuestType = self:SafeToNumber(tagInfo.worldQuestType)
-	end
-	if worldQuestType ~= nil and worldQuestType > 0 then
+	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
+	local trackedQuest = tracker and tracker[numericQuestId] or nil
+	if trackedQuest and trackedQuest.taskAnnouncementType == "world" then
 		return true
-	end
-
-	if Enum and Enum.QuestTag and Enum.QuestTag.WorldQuest then
-		local tagID = nil
-		if not self:IsSecretValue(tagInfo.tagID) then
-			tagID = self:SafeToNumber(tagInfo.tagID)
-		end
-		if tagID ~= nil and tagID == Enum.QuestTag.WorldQuest then
-			return true
-		end
 	end
 
 	return false
@@ -3756,17 +3914,21 @@ end
 
 function QuestTogether:IsBonusObjective(questId)
 	local numericQuestId = self:NormalizeQuestID(questId)
-	if not numericQuestId or not C_QuestLog or not C_QuestLog.IsQuestTask then
+	if not numericQuestId then
 		return false
 	end
 
-	-- Quest APIs may throw on IDs that disappear mid-update; treat as false.
-	local ok, isTaskQuest = pcall(C_QuestLog.IsQuestTask, numericQuestId)
-	if not (ok and isTaskQuest) then
-		return false
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
+	end
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(numericQuestId) or nil
+	if snapshot and snapshot.isBonusObjective ~= nil then
+		return snapshot.isBonusObjective == true
 	end
 
-	return not self:IsWorldQuest(numericQuestId)
+	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
+	local trackedQuest = tracker and tracker[numericQuestId] or nil
+	return trackedQuest and trackedQuest.taskAnnouncementType == "bonus" or false
 end
 
 function QuestTogether:GetQuestTitle(questId, questInfo)
@@ -3779,17 +3941,24 @@ function QuestTogether:GetQuestTitle(questId, questInfo)
 		return questInfo.title
 	end
 
-	if C_QuestLog and C_QuestLog.GetTitleForQuestID then
-		local okLogTitle, logTitle = pcall(C_QuestLog.GetTitleForQuestID, numericQuestId)
-		if okLogTitle and self:IsSecretValue(logTitle) then
-			logTitle = nil
-		end
-		if type(logTitle) == "string" and logTitle ~= "" then
-			return logTitle
-		end
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
+	end
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(numericQuestId) or nil
+	if snapshot and type(snapshot.title) == "string" and snapshot.title ~= "" then
+		return snapshot.title
 	end
 
 	return "Quest " .. tostring(numericQuestId)
+end
+
+function QuestTogether:IsPlaceholderQuestTitle(questId, title)
+	local numericQuestId = self:NormalizeQuestID(questId)
+	if not numericQuestId then
+		return false
+	end
+
+	return type(title) == "string" and title == ("Quest " .. tostring(numericQuestId))
 end
 
 function QuestTogether:NormalizeQuestProgressPercent(progressValue)
@@ -4631,17 +4800,21 @@ function QuestTogether:ScanQuestLog()
 	end
 
 	self:Debug("ScanQuestLog()", "quest")
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
+	end
 
 	local tracker = self:GetPlayerTracker()
 	wipe(tracker)
-
-	local numQuestLogEntries = self.API and self.API.GetNumQuestLogEntries and self.API.GetNumQuestLogEntries() or 0
 	local questsTracked = 0
 
-	for questLogIndex = 1, numQuestLogEntries do
-		local questInfo = self.API and self.API.GetQuestLogInfo and self.API.GetQuestLogInfo(questLogIndex) or nil
-		if questInfo and not questInfo.isHeader and not questInfo.isHidden then
-			self:WatchQuest(questInfo.questID, questInfo)
+	local snapshotByQuestID = self.GetQuestSnapshotByQuestID and self:GetQuestSnapshotByQuestID() or nil
+	local snapshotOrder = self.GetQuestSnapshotOrder and self:GetQuestSnapshotOrder() or nil
+	for index = 1, #(snapshotOrder or {}) do
+		local questID = snapshotOrder[index]
+		local questInfo = snapshotByQuestID and snapshotByQuestID[questID] or nil
+		if questInfo and questInfo.isHidden ~= true then
+			self:WatchQuest(questID, questInfo)
 			questsTracked = questsTracked + 1
 		end
 	end
@@ -4692,7 +4865,14 @@ function QuestTogether:WatchQuest(questId, questInfo)
 	local numericQuestId = self:NormalizeQuestID(questId)
 	self:Debugf("quest", "WatchQuest questId=%s", tostring(numericQuestId or questId))
 
-	if not numericQuestId or not questInfo then
+	if not numericQuestId then
+		return
+	end
+
+	if not questInfo and self.GetQuestSnapshot then
+		questInfo = self:GetQuestSnapshot(numericQuestId)
+	end
+	if not questInfo then
 		return
 	end
 
@@ -4710,6 +4890,13 @@ function QuestTogether:WatchQuest(questId, questInfo)
 			and self.API.GetQuestLogIndexForQuestID(numericQuestId)
 	end
 	local questTitle = self:GetQuestTitle(numericQuestId, questInfo)
+	local existingTrackedQuest = tracker[numericQuestId]
+	if self:IsPlaceholderQuestTitle(numericQuestId, questTitle) then
+		local existingTitle = existingTrackedQuest and existingTrackedQuest.title or nil
+		if type(existingTitle) == "string" and existingTitle ~= "" and not self:IsPlaceholderQuestTitle(numericQuestId, existingTitle) then
+			questTitle = existingTitle
+		end
+	end
 
 	tracker[numericQuestId] = {
 		title = questTitle,
@@ -4718,9 +4905,8 @@ function QuestTogether:WatchQuest(questId, questInfo)
 		-- Cached numeric objective values used to gate progress announcements.
 		-- This avoids noisy chat lines caused by text-only objective rewrites.
 		objectiveValues = {},
-		isComplete = self.API and self.API.IsQuestComplete and self.API.IsQuestComplete(numericQuestId) or false,
-		isReadyForTurnIn = self.API and self.API.IsQuestReadyForTurnIn and self.API.IsQuestReadyForTurnIn(numericQuestId)
-			or false,
+		isComplete = questInfo and questInfo.isComplete == true or false,
+		isReadyForTurnIn = false,
 	}
 	self:RefreshTrackedQuestAnnouncementIcon(numericQuestId, tracker[numericQuestId])
 	self:DebugState("quest", "trackedQuest", tracker[numericQuestId])

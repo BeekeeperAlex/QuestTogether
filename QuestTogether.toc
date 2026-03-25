@@ -12,6 +12,7 @@
 Core.lua
 HotPathState.lua
 HotPathRuntime.lua
+TaskArea.lua
 Nameplates.lua
 PartyState.lua
 Comms.lua

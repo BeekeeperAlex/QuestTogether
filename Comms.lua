@@ -1642,6 +1642,14 @@ function QuestTogether:PublishAnnouncementEvent(eventType, text, questId, extraD
 
 	self:DebugState("comms", "publishAnnouncement", eventData)
 	self:SendAnnouncementEvent(eventType, text, questId, extraData)
+	if self.suppressLocalAnnouncementDisplayDuringTests then
+		self:Debugf(
+			"comms",
+			"PublishAnnouncementEvent suppressed local display during tests eventType=%s",
+			SafeAddonString(self, eventType, "")
+		)
+		return true
+	end
 	self:HandleAnnouncementEvent(eventData, true)
 	return true
 end

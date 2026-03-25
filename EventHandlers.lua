@@ -43,157 +43,7 @@ local function NormalizeQuestId(addon, questId)
 	return math.floor(numericQuestId + 0.5)
 end
 
-local function CountKeys(tableValue)
-	local count = 0
-	for _ in pairs(tableValue or {}) do
-		count = count + 1
-	end
-	return count
-end
-
-local function NormalizeBooleanLike(addon, value)
-	if value == nil then
-		return nil
-	end
-	if addon and addon.IsSecretValue and addon:IsSecretValue(value) then
-		return nil
-	end
-	if type(value) == "boolean" then
-		return value
-	end
-	if addon and addon.SafeToNumber then
-		local numericValue = addon:SafeToNumber(value)
-		if numericValue ~= nil then
-			return numericValue ~= 0
-		end
-	end
-	if type(value) == "string" then
-		local normalized = value:lower()
-		if normalized == "true" then
-			return true
-		end
-		if normalized == "false" then
-			return false
-		end
-	end
-	return nil
-end
-
 local DrainQueuedQuestLogTasks
-
-local function BuildQuestLogQuestInfoIndex(addon)
-	local questInfoByQuestId = {}
-
-	if not (addon and addon.API and addon.API.GetNumQuestLogEntries and addon.API.GetQuestLogInfo) then
-		return questInfoByQuestId
-	end
-
-	local totalEntries = addon:SafeToNumber(addon.API.GetNumQuestLogEntries()) or 0
-	for entryIndex = 1, totalEntries do
-		local questInfo = addon.API.GetQuestLogInfo(entryIndex)
-		if questInfo and not questInfo.isHeader and not questInfo.isHidden then
-			local normalizedQuestId = NormalizeQuestId(addon, questInfo.questID)
-			if normalizedQuestId then
-				if not questInfoByQuestId[normalizedQuestId] then
-					questInfoByQuestId[normalizedQuestId] = questInfo
-				end
-			end
-		end
-	end
-
-	return questInfoByQuestId
-end
-
-local function BuildTaskAreaCandidateQuestIds(addon, taskType, questInfoByQuestId)
-	local candidateQuestIds = {}
-
-	for normalizedQuestId in pairs(questInfoByQuestId or {}) do
-		candidateQuestIds[normalizedQuestId] = true
-	end
-
-	return candidateQuestIds
-end
-
-local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId)
-	local mapFlags = questInfo and (questInfo.isOnMap == true or questInfo.hasLocalPOI == true) and true or false
-	local explicitTask = questInfo and questInfo.isTask == true or false
-	local explicitWorld = questInfo and questInfo.isWorldQuest == true or false
-	local bonusFallback = addon:IsBonusObjective(normalizedQuestId)
-
-	local areaActive = mapFlags
-	if taskType == "bonus" and not areaActive and explicitTask and not explicitWorld and bonusFallback then
-		areaActive = true
-	end
-
-	return {
-		mapFlags = mapFlags,
-		areaActive = areaActive and true or false,
-		taskActiveForArea = areaActive and true or false,
-		canUseTaskActiveWorldFallback = false,
-	}
-end
-
-local function EvaluateTaskAreaQuestCandidate(addon, taskType, normalizedQuestId, questInfo)
-	local title = addon:GetQuestTitle(normalizedQuestId, questInfo)
-	local explicitWorld = questInfo and questInfo.isWorldQuest == true or false
-	local fallbackWorld = addon:IsWorldQuest(normalizedQuestId)
-	local isWorldQuest = explicitWorld or fallbackWorld
-
-	local taskFlag = questInfo and questInfo.isTask == true or false
-	local bonusFallback = addon:IsBonusObjective(normalizedQuestId)
-	local isTask = taskFlag or isWorldQuest or bonusFallback
-
-	local areaSignals = ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId)
-	local isWorldQuestByActiveTaskFallback = false
-	if not isWorldQuest and areaSignals.canUseTaskActiveWorldFallback and not bonusFallback then
-		isWorldQuest = true
-		isWorldQuestByActiveTaskFallback = true
-	end
-	local shouldPromoteToTask = areaSignals.areaActive == true
-	if taskType ~= "world" and areaSignals.taskActiveForArea == true then
-		shouldPromoteToTask = true
-	end
-	if not isTask and shouldPromoteToTask then
-		isTask = true
-	end
-
-	local matchesType = false
-	if taskType == "world" then
-		matchesType = isWorldQuest and true or false
-	elseif taskType == "bonus" then
-		matchesType = isWorldQuest ~= true
-	end
-
-	return {
-		title = title,
-		explicitWorld = explicitWorld,
-		fallbackWorld = fallbackWorld,
-		isWorldQuestByActiveTaskFallback = isWorldQuestByActiveTaskFallback,
-		isWorldQuest = isWorldQuest,
-		taskFlag = taskFlag,
-		bonusFallback = bonusFallback,
-		isTask = isTask,
-		matchesType = matchesType,
-		include = isTask and areaSignals.areaActive == true and matchesType,
-		areaSignals = areaSignals,
-	}
-end
-
-local function SortedQuestIdKeys(tableValue)
-	local keys = {}
-	for questId in pairs(tableValue or {}) do
-		keys[#keys + 1] = questId
-	end
-	table.sort(keys, function(a, b)
-		local aNum = QuestTogether:SafeToNumber(a)
-		local bNum = QuestTogether:SafeToNumber(b)
-		if aNum ~= nil and bNum ~= nil then
-			return aNum < bNum
-		end
-		return SafeText(a, "") < SafeText(b, "")
-	end)
-	return keys
-end
 
 DrainQueuedQuestLogTasks = function(addon)
 	if not addon then
@@ -320,6 +170,22 @@ function QuestTogether:ShouldPublishObjectiveProgress(currentValue)
 end
 
 function QuestTogether:GetTaskAnnouncementType(questId)
+	questId = NormalizeQuestId(self, questId)
+	if not questId then
+		return nil
+	end
+
+	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
+	local trackedQuest = tracker and tracker[questId] or nil
+	if trackedQuest and type(trackedQuest.taskAnnouncementType) == "string" and trackedQuest.taskAnnouncementType ~= "" then
+		return trackedQuest.taskAnnouncementType
+	end
+
+	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(questId) or nil
+	if snapshot and type(snapshot.taskAnnouncementType) == "string" and snapshot.taskAnnouncementType ~= "" then
+		return snapshot.taskAnnouncementType
+	end
+
 	if self:IsWorldQuest(questId) then
 		return "world"
 	end
@@ -342,9 +208,16 @@ function QuestTogether:BuildTrackedQuestRemovalData(questId)
 	end
 
 	local iconAsset, iconKind = self:GetTrackedQuestAnnouncementIcon(trackedQuest)
+	local questTitle = trackedQuest.title
+	if self.IsPlaceholderQuestTitle and self:IsPlaceholderQuestTitle(questId, questTitle) then
+		local resolvedTitle = self:GetQuestTitle(questId)
+		if type(resolvedTitle) == "string" and resolvedTitle ~= "" and not self:IsPlaceholderQuestTitle(questId, resolvedTitle) then
+			questTitle = resolvedTitle
+		end
+	end
 	return {
 		questId = questId,
-		title = trackedQuest.title or ("Quest " .. SafeText(questId, "?")),
+		title = questTitle or ("Quest " .. SafeText(questId, "?")),
 		taskAnnouncementType = trackedQuest.taskAnnouncementType or self:GetTaskAnnouncementType(questId),
 		iconAsset = iconAsset,
 		iconKind = iconKind,
@@ -442,178 +315,6 @@ function QuestTogether:HandleGroupRosterChanged(reason)
 		SafeText(previousFingerprint, ""),
 		SafeText(newFingerprint, "")
 	)
-end
-
--- Snapshot active task quests from sanitized quest-log rows only.
--- This intentionally avoids live task-area helper APIs such as GetTasksTable(), GetTaskInfo(),
--- and IsQuestOnMap(), which have proven to taint Blizzard world-map pin and quest-list paths.
-function QuestTogether:GetTaskAreaSnapshot(taskType)
-	local activeByQuestId = {}
-
-	if self.API and self.API.GetNumQuestLogEntries and self.API.GetQuestLogInfo then
-		local questInfoByQuestId = BuildQuestLogQuestInfoIndex(self)
-		local candidateQuestIds = BuildTaskAreaCandidateQuestIds(self, taskType, questInfoByQuestId)
-		for _, normalizedQuestId in ipairs(SortedQuestIdKeys(candidateQuestIds)) do
-			local questInfo = questInfoByQuestId[normalizedQuestId]
-			local evaluation = EvaluateTaskAreaQuestCandidate(self, taskType, normalizedQuestId, questInfo)
-			if evaluation.include then
-				activeByQuestId[normalizedQuestId] = evaluation.title
-			end
-		end
-	end
-
-	return activeByQuestId
-end
-
-function QuestTogether:GetActiveWorldQuestAreaSnapshot()
-	return self:GetTaskAreaSnapshot("world")
-end
-
-function QuestTogether:GetActiveBonusObjectiveAreaSnapshot()
-	return self:GetTaskAreaSnapshot("bonus")
-end
-
-function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
-	local configByType = {
-		world = {
-			snapshotMethod = "GetActiveWorldQuestAreaSnapshot",
-			enterEvent = "WORLD_QUEST_ENTERED",
-			leftEvent = "WORLD_QUEST_LEFT",
-			enterPrefix = "World Quest Entered: ",
-			leftPrefix = "Left World Quest: ",
-			debugLabel = "World quest",
-		},
-		bonus = {
-			snapshotMethod = "GetActiveBonusObjectiveAreaSnapshot",
-			enterEvent = "BONUS_OBJECTIVE_ENTERED",
-			leftEvent = "BONUS_OBJECTIVE_LEFT",
-			enterPrefix = "Bonus Objective Entered: ",
-			leftPrefix = "Left Bonus Objective: ",
-			debugLabel = "Bonus objective",
-		},
-	}
-
-	local config = configByType[taskType]
-	if not config or type(self[config.snapshotMethod]) ~= "function" then
-		return
-	end
-
-	local previousStateRaw = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore(taskType) or {}
-	local currentStateRaw = self[config.snapshotMethod](self) or {}
-	local previousState = {}
-	local currentState = {}
-
-	for questId, questTitle in pairs(previousStateRaw) do
-		local normalizedQuestId = NormalizeQuestId(self, questId)
-		if normalizedQuestId then
-			previousState[normalizedQuestId] = questTitle
-		end
-	end
-
-	for questId, questTitle in pairs(currentStateRaw) do
-		local normalizedQuestId = NormalizeQuestId(self, questId)
-		if normalizedQuestId then
-			currentState[normalizedQuestId] = questTitle
-		end
-	end
-
-	self:Debugf(
-		"quest",
-		"RefreshTaskAreaState type=%s announce=%s prev=%d curr=%d",
-		SafeText(taskType, ""),
-		SafeText(shouldAnnounce, "false"),
-		CountKeys(previousState),
-		CountKeys(currentState)
-	)
-	for questId, questTitle in pairs(currentState) do
-		if not previousState[questId] and shouldAnnounce then
-			self:Debugf(
-				"quest",
-				"%s area entered questId=%s title=%s",
-				SafeText(config.debugLabel, ""),
-				SafeText(questId, "?"),
-				SafeText(questTitle, "Unknown")
-			)
-			self:PublishAnnouncementEvent(config.enterEvent, config.enterPrefix .. SafeText(questTitle, "Unknown"), questId)
-		end
-	end
-
-	for questId, previousTitle in pairs(previousState) do
-		if not currentState[questId] then
-			local wasCompleted = self.questsCompleted[questId] ~= nil
-			if shouldAnnounce and not wasCompleted then
-				local questTitle = previousTitle or self:GetQuestTitle(questId)
-				self:Debugf(
-					"quest",
-					"%s area left questId=%s title=%s",
-					SafeText(config.debugLabel, ""),
-					SafeText(questId, "?"),
-					SafeText(questTitle, "Unknown")
-				)
-				self:PublishAnnouncementEvent(config.leftEvent, config.leftPrefix .. SafeText(questTitle, "Unknown"), questId)
-			end
-		end
-	end
-
-	if self.GetTaskAreaStateStore then
-		local stateStore = self:GetTaskAreaStateStore(taskType)
-		wipe(stateStore)
-		for questId, questTitle in pairs(currentState) do
-			stateStore[questId] = questTitle
-		end
-	else
-		if taskType == "bonus" then
-			self.bonusObjectiveAreaStateByQuestID = currentState
-		else
-			self.worldQuestAreaStateByQuestID = currentState
-		end
-	end
-end
-
-function QuestTogether:RefreshWorldQuestAreaState(shouldAnnounce)
-	self:RefreshTaskAreaState("world", shouldAnnounce)
-end
-
-function QuestTogether:RefreshBonusObjectiveAreaState(shouldAnnounce)
-	self:RefreshTaskAreaState("bonus", shouldAnnounce)
-end
-
-function QuestTogether:ScheduleTaskAreaRefresh(shouldAnnounce, delaySeconds)
-	if self.ScheduleTaskAreaRefreshWork then
-		self:ScheduleTaskAreaRefreshWork(shouldAnnounce, delaySeconds, "ScheduleTaskAreaRefresh")
-		return
-	end
-
-	self:RefreshTaskAreaStates(shouldAnnounce)
-end
-
-function QuestTogether:RefreshTaskAreaStates(shouldAnnounce)
-	if self.IsWorkBlocked and self:IsWorkBlocked("task_area_refresh") then
-		if shouldAnnounce then
-			if self.SetRuntimeFlag then
-				self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
-			else
-				self.pendingScheduledTaskAreaRefreshShouldAnnounce = true
-			end
-		end
-		self:Debugf("quest", "Deferring task area refresh through runtime gate announce=%s", SafeText(shouldAnnounce, "false"))
-		self:ScheduleTaskAreaRefresh(shouldAnnounce, 0.2)
-		return false
-	end
-
-	local pendingAnnounce = self.GetRuntimeFlag
-		and self:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
-		or self.pendingScheduledTaskAreaRefreshShouldAnnounce
-	local resolvedShouldAnnounce = shouldAnnounce or (pendingAnnounce and true or false)
-	if self.SetRuntimeFlag then
-		self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
-	else
-		self.pendingScheduledTaskAreaRefreshShouldAnnounce = false
-	end
-
-	self:RefreshWorldQuestAreaState(resolvedShouldAnnounce)
-	self:RefreshBonusObjectiveAreaState(resolvedShouldAnnounce)
-	return true
 end
 
 function QuestTogether:PLAYER_REGEN_ENABLED()

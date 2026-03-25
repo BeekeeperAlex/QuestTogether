@@ -271,6 +271,9 @@ function QuestTogether:ScheduleQuestStateRefreshWork(reason, delaySeconds)
 		else
 			self.pendingDeferredNameplateQuestStateRefresh = false
 		end
+		if self.RebuildQuestSnapshotStore then
+			self:RebuildQuestSnapshotStore()
+		end
 		if self.RefreshNameplatesForQuestStateChange then
 			self:RefreshNameplatesForQuestStateChange(reason)
 		end

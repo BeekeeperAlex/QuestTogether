@@ -22,6 +22,18 @@
 - [x] Update tests to assert boring-hot-path behavior and use the runtime store source of truth.
 - [ ] Run live-client validation and record any surviving engine-level restrictions.
 
+## Remaining Work Checklist
+- [x] Add an addon-owned quest snapshot store for title, quest-log index, task/world classification, tag metadata, and POI icon metadata.
+- [x] Rebuild the quest snapshot only through the shared `quest_snapshot_refresh` worker or safe on-demand snapshot rebuilds.
+- [x] Route quest scan, task-area candidate building, and nameplate title-cache rebuilds through the quest snapshot store instead of direct live quest-log walks.
+- [x] Remove live `C_QuestLog` classification fallbacks from ordinary runtime helpers; classification now comes from the quest snapshot/tracker path, while live `C_QuestLog` classification is confined to snapshot building.
+- [x] Remove dead legacy compatibility state and test-harness preservation for pre-refactor map-hidden pending fields.
+- [x] Remove dead per-feature tint retry counter state.
+- [x] Remove the remaining live `C_QuestLog` metadata fallbacks from ordinary runtime helpers and wrappers; titles, tag info, POI icon metadata, quest-log index lookup, and quest-log row lookup now resolve from snapshots or sanitized `GetQuestLogTitle()` data only.
+- [x] Formalize task-area logic into a dedicated resolver/coordinator subsystem and keep it snapshot-only; live local-task engine helpers were tested and removed after they still produced delayed world-map taint.
+- [ ] Re-run `/qt test` and live world-map / quest-log / combat regressions after the snapshot-store conversion.
+- [ ] Record any remaining unavoidable engine restrictions and mark the checklist complete only after those are the only documented exceptions.
+
 ## Banned Patterns To Remove
 - `IsWorldMapVisible` as feature logic.
 - `ScheduleDeferred*AfterMapHidden` style recovery.
@@ -52,7 +64,14 @@
 - Hardened quest-log numeric wrappers so `GetQuestLogIndexForQuestID`, `GetNumQuestLogEntries`, and `GetNumQuestLeaderBoards` always return normalized primitive numbers instead of raw Blizzard numerics.
 - `GetQuestLogIndexForQuestID` now prefers a sanitized quest-log scan over `C_QuestLog.GetLogIndexForQuestID`, and sanitized quest-log snapshots now carry an addon-owned `questLogIndex` so `WatchQuest()` does not need to re-query Blizzard for it during full scans.
 - Removed the last runtime uses of `GetTasksTable()`, `GetTaskInfo()`, and `IsQuestOnMap()` from task-area snapshots. Task-area enter/leave detection is now derived from sanitized quest-log rows only to avoid contaminating Blizzard's map canvas and quest-list flows.
+- Removed the remaining `C_QuestLog.GetLogIndexForQuestID`, `C_QuestLog.GetQuestIDForLogIndex`, and `C_QuestLog.GetInfo` fallback paths from the sanitized quest-log wrappers. On retail, quest-log snapshots now stay on the `GetQuestLogTitle()` path instead of dropping back into broader Blizzard quest-info tables.
+- Disabled the legacy hidden-tooltip nameplate scan on structured-tooltip clients. On retail/mainline, QuestTogether now follows a stricter Plater-style branch split: Questie or cached state only, with no hidden `GameTooltip:SetHyperlink("unit:...")` fallback left to poison later world-map tooltip/layout flows.
+- Added an explicit quest snapshot store to the runtime state and routed quest scan, task-area snapshot building, nameplate title-cache rebuilds, and ordinary quest classification/title lookups through that addon-owned snapshot.
+- Restricted snapshot auto-rebuilds so blocked map/restriction windows return stale-or-empty snapshot state instead of probing live Blizzard quest APIs.
+- Removed the remaining ordinary-runtime `C_QuestLog` metadata fallbacks. Snapshot consumers now no longer fall through to live `C_QuestLog` tag/theme/title/index/info helpers, and the snapshot builder itself no longer relies on `C_QuestLog.IsWorldQuest()` / `IsQuestTask()` classification probes.
+- Added `TaskArea.lua` as a first-class subsystem. Task-area truth now flows through one resolver/coordinator that consumes addon-owned quest snapshot fields only and produces addon-owned resolver state plus active world/bonus snapshots.
 
 ## Open Risks
 - Static validation is clean, and one live `/qt test` pass already exposed and validated follow-up fixes, but another in-game `/qt test` and combat/world-map regression pass is still needed after the latest patches.
 - Some legacy top-level aliases still exist as compatibility surfaces, even though the store now owns the underlying runtime data.
+- The remaining live Blizzard quest dependencies are now concentrated in snapshot-build metadata enrichment (`C_QuestLog.GetQuestTagInfo`, `C_QuestLog.GetQuestDetailsTheme`) plus narrow quest identity/title recovery (`C_QuestLog.GetQuestIDForLogIndex`, `C_QuestLog.GetTitleForQuestID`, `C_TaskQuest.GetQuestInfoByQuestID`). Task-area resolver dependencies on `GetTasksTable`, `GetTaskInfo`, and `C_TaskQuest.IsActive` were removed after live validation showed they could still contaminate Blizzard's world-map paths.

@@ -188,7 +188,6 @@ else
 	QuestTogether.nameplateRefreshGenerationByUnitToken = QuestTogether.nameplateRefreshGenerationByUnitToken or {}
 	QuestTogether.nameplateHealthTintRefreshPendingByUnitToken =
 		QuestTogether.nameplateHealthTintRefreshPendingByUnitToken or {}
-	QuestTogether.nameplateHealthTintRetryCountByUnitToken = QuestTogether.nameplateHealthTintRetryCountByUnitToken or {}
 	QuestTogether.nameplateFullRefreshGeneration = QuestTogether.nameplateFullRefreshGeneration or 0
 end
 
@@ -1433,7 +1432,11 @@ function QuestTogether:StoreResolvedNameplateQuestState(unitToken, unitGuid, isQ
 		return
 	end
 
-	self.nameplateQuestStateByGuid[unitGuid] = isQuestObjective and true or false
+	if isQuestObjective then
+		self.nameplateQuestStateByGuid[unitGuid] = true
+	else
+		self.nameplateQuestStateByGuid[unitGuid] = nil
+	end
 	if self:IsNameplateUnitToken(unitToken) then
 		self.nameplateQuestStateByUnitToken[unitToken] = isQuestObjective and true or false
 		self.nameplateQuestGuidByUnitToken[unitToken] = unitGuid
@@ -1465,16 +1468,30 @@ function QuestTogether:RebuildNameplateQuestTitleCache()
 		return
 	end
 
+	if self.EnsureQuestSnapshotStore then
+		self:EnsureQuestSnapshotStore()
+	end
+
+	local snapshotByQuestID = self.GetQuestSnapshotByQuestID and self:GetQuestSnapshotByQuestID() or nil
+	local snapshotOrder = self.GetQuestSnapshotOrder and self:GetQuestSnapshotOrder() or nil
+	if type(snapshotOrder) == "table" and #snapshotOrder > 0 then
+		for index = 1, #snapshotOrder do
+			local questID = snapshotOrder[index]
+			local questDetails = snapshotByQuestID and snapshotByQuestID[questID] or nil
+			if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
+				self.nameplateQuestTitleCache[questDetails.title] = true
+			end
+		end
+		return
+	end
+
+	-- Keep a combat-safe quest-title cache refresh path like Plater's quest-log
+	-- rebuild. This is a worker/cache path, not the presenter hot path.
 	if self.API and self.API.GetNumQuestLogEntries and self.API.GetQuestLogInfo then
 		local totalEntries = SafeUiNumber(self.API.GetNumQuestLogEntries(), 0) or 0
 		for entryIndex = 1, totalEntries do
 			local questDetails = self.API.GetQuestLogInfo(entryIndex)
-			if
-				questDetails
-				and not questDetails.isHeader
-				and type(questDetails.title) == "string"
-				and questDetails.title ~= ""
-			then
+			if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
 				self.nameplateQuestTitleCache[questDetails.title] = true
 			end
 		end
@@ -1891,8 +1908,10 @@ function QuestTogether:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
 end
 
 function QuestTogether:IsNameplateTooltipScanEnabled()
-	-- Keep the addon-owned hidden tooltip scan as a final fallback, but only the
-	-- runtime resolver should invoke it. Presenter paths stay cache-driven.
+	-- Keep the addon-owned hidden tooltip scan as the final fallback source. The
+	-- shared runtime gate now blocks tooltip resolution in map-sensitive windows,
+	-- so this fallback stays feature-preserving without running through those
+	-- restricted contexts.
 	return DEFAULT_ENABLE_TOOLTIP_QUEST_SCAN_FALLBACK
 end
 
@@ -3017,11 +3036,6 @@ function QuestTogether:ApplyQuestTintToNameplate(unitFrame)
 		end
 	end
 
-	local unitToken = unitFrame.unit or unitFrame.displayedUnit
-	if type(unitToken) == "string" and unitToken ~= "" then
-		self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
-	end
-
 	return true
 end
 
@@ -3061,9 +3075,6 @@ function QuestTogether:RefreshNameplateHealthTint(namePlateFrameBase, isQuestObj
 			self:ScheduleNameplateHealthTintRefresh(unitToken, 0.05, true)
 		end
 	else
-		if type(unitToken) == "string" and unitToken ~= "" then
-			self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
-		end
 		self:RestoreNameplateHealthColor(unitFrame)
 	end
 end
@@ -3088,7 +3099,6 @@ function QuestTogether:ScheduleNameplateHealthTintRefresh(unitToken, delaySecond
 
 		if liveUnitToken ~= unitToken then
 			self:ForgetResolvedNameplateQuestState(unitToken)
-			self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
 		end
 
 		local hasResolvedQuestState, isQuestObjective = self:TryResolveNameplateQuestObjectiveState(
@@ -3458,7 +3468,6 @@ function QuestTogether:OnNameplateAdded(unitToken)
 	end
 	if self:IsNameplateAugmentationBlockedInCurrentContext() then
 		self:ForgetResolvedNameplateQuestState(unitToken)
-		self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
 		local namePlateFrameBase = self:GetAccessibleNameplateFrameForUnit(unitToken, false)
 		if namePlateFrameBase then
 			-- Nameplate frames are recycled across zone and instance transitions.
@@ -3471,7 +3480,6 @@ function QuestTogether:OnNameplateAdded(unitToken)
 	local namePlateFrameBase = self:GetAccessibleNameplateFrameForUnit(unitToken, false)
 
 	self:ForgetResolvedNameplateQuestState(unitToken)
-	self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
 
 	if namePlateFrameBase then
 		-- Nameplate frames are recycled. Clear any stale icon/tint immediately so visuals
@@ -3493,7 +3501,6 @@ function QuestTogether:OnNameplateRemoved(unitToken)
 	self.nameplateRefreshPendingByUnitToken[unitToken] = nil
 	self.nameplateRefreshGenerationByUnitToken[unitToken] = nil
 	self.nameplateHealthTintRefreshPendingByUnitToken[unitToken] = nil
-	self.nameplateHealthTintRetryCountByUnitToken[unitToken] = nil
 
 	local namePlateFrameBase = self.API and self.API.GetNamePlateForUnit and self.API.GetNamePlateForUnit(unitToken) or nil
 	if namePlateFrameBase then

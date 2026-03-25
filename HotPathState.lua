@@ -20,8 +20,30 @@ function QuestTogether:EnsureRuntimeStateStore()
 	if type(state.taskArea.bonusByQuestID) ~= "table" then
 		state.taskArea.bonusByQuestID = {}
 	end
+	if type(state.taskArea.resolvedByQuestID) ~= "table" then
+		state.taskArea.resolvedByQuestID = {}
+	end
+	if type(state.taskArea.resolutionOrder) ~= "table" then
+		state.taskArea.resolutionOrder = {}
+	end
+	if type(state.taskArea.generation) ~= "number" then
+		state.taskArea.generation = 0
+	end
 	if state.taskArea.pendingAnnounce ~= true then
 		state.taskArea.pendingAnnounce = false
+	end
+
+	if type(state.questSnapshot) ~= "table" then
+		state.questSnapshot = {}
+	end
+	if type(state.questSnapshot.byQuestID) ~= "table" then
+		state.questSnapshot.byQuestID = {}
+	end
+	if type(state.questSnapshot.order) ~= "table" then
+		state.questSnapshot.order = {}
+	end
+	if type(state.questSnapshot.generation) ~= "number" then
+		state.questSnapshot.generation = 0
 	end
 
 	if type(state.nameplate) ~= "table" then
@@ -47,9 +69,6 @@ function QuestTogether:EnsureRuntimeStateStore()
 	end
 	if type(state.nameplate.healthTintRefreshPendingByUnitToken) ~= "table" then
 		state.nameplate.healthTintRefreshPendingByUnitToken = {}
-	end
-	if type(state.nameplate.healthTintRetryCountByUnitToken) ~= "table" then
-		state.nameplate.healthTintRetryCountByUnitToken = {}
 	end
 	if type(state.nameplate.iconByUnitFrame) ~= "table" then
 		state.nameplate.iconByUnitFrame = NewWeakKeyTable()
@@ -113,10 +132,62 @@ function QuestTogether:GetTaskAreaStateStore(taskType)
 	return state.taskArea.worldByQuestID
 end
 
+function QuestTogether:GetTaskAreaSubsystemStateStore()
+	return self:EnsureRuntimeStateStore().taskArea
+end
+
+function QuestTogether:GetTaskAreaResolverStore()
+	return self:GetTaskAreaSubsystemStateStore().resolvedByQuestID
+end
+
+function QuestTogether:GetTaskAreaResolutionOrder()
+	return self:GetTaskAreaSubsystemStateStore().resolutionOrder
+end
+
+function QuestTogether:GetTaskAreaResolution(questID)
+	local numericQuestID = self.NormalizeQuestID and self:NormalizeQuestID(questID) or nil
+	if not numericQuestID then
+		return nil
+	end
+	return self:GetTaskAreaResolverStore()[numericQuestID]
+end
+
+function QuestTogether:GetQuestSnapshotStateStore()
+	return self:EnsureRuntimeStateStore().questSnapshot
+end
+
+function QuestTogether:GetQuestSnapshotByQuestID()
+	return self:GetQuestSnapshotStateStore().byQuestID
+end
+
+function QuestTogether:GetQuestSnapshotOrder()
+	return self:GetQuestSnapshotStateStore().order
+end
+
+function QuestTogether:GetQuestSnapshot(questID)
+	local numericQuestID = self.NormalizeQuestID and self:NormalizeQuestID(questID) or nil
+	if not numericQuestID then
+		return nil
+	end
+	return self:GetQuestSnapshotByQuestID()[numericQuestID]
+end
+
+function QuestTogether:ResetQuestSnapshotStateStore()
+	local state = self:GetQuestSnapshotStateStore()
+	state.byQuestID = {}
+	state.order = {}
+	state.generation = 0
+	self:SyncLegacyRuntimeStateAliases()
+	return state
+end
+
 function QuestTogether:ResetTaskAreaStateStore()
 	local state = self:EnsureRuntimeStateStore()
 	state.taskArea.worldByQuestID = {}
 	state.taskArea.bonusByQuestID = {}
+	state.taskArea.resolvedByQuestID = {}
+	state.taskArea.resolutionOrder = {}
+	state.taskArea.generation = 0
 	state.taskArea.pendingAnnounce = false
 	self:SyncLegacyRuntimeStateAliases()
 	return state.taskArea
@@ -135,7 +206,6 @@ function QuestTogether:ResetNameplateStateStore()
 	state.nameplate.refreshGenerationByUnitToken = {}
 	state.nameplate.refreshPendingByUnitToken = {}
 	state.nameplate.healthTintRefreshPendingByUnitToken = {}
-	state.nameplate.healthTintRetryCountByUnitToken = {}
 	state.nameplate.iconByUnitFrame = NewWeakKeyTable()
 	state.nameplate.healthOverlayByUnitFrame = NewWeakKeyTable()
 	state.nameplate.bubbleByUnitFrame = NewWeakKeyTable()
@@ -203,6 +273,8 @@ function QuestTogether:SyncLegacyRuntimeStateAliases()
 
 	self.worldQuestAreaStateByQuestID = state.taskArea.worldByQuestID
 	self.bonusObjectiveAreaStateByQuestID = state.taskArea.bonusByQuestID
+	self.questSnapshotByQuestID = state.questSnapshot.byQuestID
+	self.questSnapshotOrder = state.questSnapshot.order
 
 	self.nameplateQuestTitleCache = state.nameplate.titleCache
 	self.nameplateQuestStateByGuid = state.nameplate.questStateByGuid
@@ -215,7 +287,6 @@ function QuestTogether:SyncLegacyRuntimeStateAliases()
 	self.nameplateRefreshPendingByUnitToken = state.nameplate.refreshPendingByUnitToken
 	self.nameplateRefreshGenerationByUnitToken = state.nameplate.refreshGenerationByUnitToken
 	self.nameplateHealthTintRefreshPendingByUnitToken = state.nameplate.healthTintRefreshPendingByUnitToken
-	self.nameplateHealthTintRetryCountByUnitToken = state.nameplate.healthTintRetryCountByUnitToken
 
 	self.personalBubbleSliderHandlesByFrame = state.personalBubble.sliderHandlesByFrame
 	self.personalBubbleDialogPositionByFrame = state.personalBubble.dialogPositionByFrame
