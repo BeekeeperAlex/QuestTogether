@@ -10,6 +10,8 @@
 ## X-License: MIT License
 
 Core.lua
+HotPathState.lua
+HotPathRuntime.lua
 Nameplates.lua
 PartyState.lua
 Comms.lua

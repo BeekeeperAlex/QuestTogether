@@ -113,46 +113,7 @@ local function BuildTaskAreaContext(addon, taskType)
 	return localTaskQuestSet, nil
 end
 
-local function IsWorldMapVisible(addon)
-	if not (addon and addon.API and type(addon.API.IsWorldMapVisible) == "function") then
-		return false
-	end
-	return addon.API.IsWorldMapVisible() and true or false
-end
-
 local DrainQueuedQuestLogTasks
-
-function QuestTogether:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
-	if self.questLogTaskMapVisibilityRetryPending then
-		return
-	end
-
-	local delayFn = self.API and self.API.Delay
-	if type(delayFn) ~= "function" then
-		return
-	end
-
-	self.questLogTaskMapVisibilityRetryPending = true
-	delayFn(0.2, function()
-		QuestTogether.questLogTaskMapVisibilityRetryPending = false
-		if not QuestTogether.isEnabled then
-			return
-		end
-		if not QuestTogether.pendingQuestLogTaskDrain then
-			return
-		end
-		if IsWorldMapVisible(QuestTogether) then
-			QuestTogether:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
-			return
-		end
-
-		QuestTogether.pendingQuestLogTaskDrain = false
-		local drainedCount = DrainQueuedQuestLogTasks(QuestTogether)
-		if drainedCount > 0 then
-			QuestTogether:Debugf("quest", "Resuming deferred quest log tasks after world map hidden count=%d", drainedCount)
-		end
-	end)
-end
 
 local function BuildQuestLogQuestInfoIndex(addon)
 	local questInfoByQuestId = {}
@@ -422,6 +383,10 @@ DrainQueuedQuestLogTasks = function(addon)
 	return #queuedTasks
 end
 
+function QuestTogether:DrainQueuedQuestLogTasks()
+	return DrainQueuedQuestLogTasks(self)
+end
+
 local function ParseObjectiveProgressFromText(objectiveText)
 	if type(objectiveText) ~= "string" or objectiveText == "" then
 		return nil
@@ -580,8 +545,10 @@ function QuestTogether:ClearTrackedQuestState(questId)
 	end
 
 	local tracker = self:GetPlayerTracker()
-	self.worldQuestAreaStateByQuestID[questId] = nil
-	self.bonusObjectiveAreaStateByQuestID[questId] = nil
+	local worldState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("world") or self.worldQuestAreaStateByQuestID
+	local bonusState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("bonus") or self.bonusObjectiveAreaStateByQuestID
+	worldState[questId] = nil
+	bonusState[questId] = nil
 	tracker[questId] = nil
 	self.pendingQuestRemovals[questId] = nil
 	self.questsCompleted[questId] = nil
@@ -680,7 +647,6 @@ end
 function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 	local configByType = {
 		world = {
-			stateKey = "worldQuestAreaStateByQuestID",
 			snapshotMethod = "GetActiveWorldQuestAreaSnapshot",
 			enterEvent = "WORLD_QUEST_ENTERED",
 			leftEvent = "WORLD_QUEST_LEFT",
@@ -689,7 +655,6 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 			debugLabel = "World quest",
 		},
 		bonus = {
-			stateKey = "bonusObjectiveAreaStateByQuestID",
 			snapshotMethod = "GetActiveBonusObjectiveAreaSnapshot",
 			enterEvent = "BONUS_OBJECTIVE_ENTERED",
 			leftEvent = "BONUS_OBJECTIVE_LEFT",
@@ -704,7 +669,7 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 		return
 	end
 
-	local previousStateRaw = self[config.stateKey] or {}
+	local previousStateRaw = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore(taskType) or {}
 	local currentStateRaw = self[config.snapshotMethod](self) or {}
 	local previousState = {}
 	local currentState = {}
@@ -761,7 +726,19 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 		end
 	end
 
-	self[config.stateKey] = currentState
+	if self.GetTaskAreaStateStore then
+		local stateStore = self:GetTaskAreaStateStore(taskType)
+		wipe(stateStore)
+		for questId, questTitle in pairs(currentState) do
+			stateStore[questId] = questTitle
+		end
+	else
+		if taskType == "bonus" then
+			self.bonusObjectiveAreaStateByQuestID = currentState
+		else
+			self.worldQuestAreaStateByQuestID = currentState
+		end
+	end
 end
 
 function QuestTogether:RefreshWorldQuestAreaState(shouldAnnounce)
@@ -772,97 +749,38 @@ function QuestTogether:RefreshBonusObjectiveAreaState(shouldAnnounce)
 	self:RefreshTaskAreaState("bonus", shouldAnnounce)
 end
 
-function QuestTogether:ScheduleDeferredTaskAreaRefreshAfterMapHidden()
-	if self.taskAreaMapVisibilityRetryPending then
-		return
-	end
-
-	local delayFn = self.API and self.API.Delay
-	if type(delayFn) ~= "function" then
-		return
-	end
-
-	self.taskAreaMapVisibilityRetryPending = true
-	delayFn(0.2, function()
-		QuestTogether.taskAreaMapVisibilityRetryPending = false
-		if not QuestTogether.isEnabled then
-			return
-		end
-		if not QuestTogether.pendingTaskAreaRefreshAfterMapHidden then
-			return
-		end
-		if IsWorldMapVisible(QuestTogether) then
-			QuestTogether:ScheduleDeferredTaskAreaRefreshAfterMapHidden()
-			return
-		end
-
-		local shouldAnnounce = QuestTogether.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce and true or false
-		QuestTogether.pendingTaskAreaRefreshAfterMapHidden = false
-		QuestTogether.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce = false
-		QuestTogether:RefreshTaskAreaStates(shouldAnnounce)
-	end)
-end
-
 function QuestTogether:ScheduleTaskAreaRefresh(shouldAnnounce, delaySeconds)
-	if shouldAnnounce then
-		self.pendingScheduledTaskAreaRefreshShouldAnnounce = true
-	end
-
-	if self.pendingScheduledTaskAreaRefresh then
+	if self.ScheduleTaskAreaRefreshWork then
+		self:ScheduleTaskAreaRefreshWork(shouldAnnounce, delaySeconds, "ScheduleTaskAreaRefresh")
 		return
 	end
 
-	local delayFn = self.API and self.API.Delay
-	if type(delayFn) ~= "function" then
-		self:RefreshTaskAreaStates(shouldAnnounce)
-		return
-	end
-
-	self.pendingScheduledTaskAreaRefresh = true
-	delayFn(delaySeconds or 0, function()
-		local announce = QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce and true or false
-		QuestTogether.pendingScheduledTaskAreaRefresh = false
-		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = false
-		if not QuestTogether.isEnabled then
-			return
-		end
-		QuestTogether:RefreshTaskAreaStates(announce)
-	end)
+	self:RefreshTaskAreaStates(shouldAnnounce)
 end
 
 function QuestTogether:RefreshTaskAreaStates(shouldAnnounce)
-	local inCombatLockdown = self.API and self.API.InCombatLockdown and self.API.InCombatLockdown()
-	if inCombatLockdown then
-		self.pendingTaskAreaRefresh = true
+	if self.IsWorkBlocked and self:IsWorkBlocked("task_area_refresh") then
 		if shouldAnnounce then
-			self.pendingTaskAreaRefreshShouldAnnounce = true
+			if self.SetRuntimeFlag then
+				self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
+			else
+				self.pendingScheduledTaskAreaRefreshShouldAnnounce = true
+			end
 		end
-		self:Debugf("quest", "Deferring task area refresh during combat announce=%s", SafeText(shouldAnnounce, "false"))
+		self:Debugf("quest", "Deferring task area refresh through runtime gate announce=%s", SafeText(shouldAnnounce, "false"))
+		self:ScheduleTaskAreaRefresh(shouldAnnounce, 0.2)
 		return false
 	end
 
-	if IsWorldMapVisible(self) then
-		self.pendingTaskAreaRefreshAfterMapHidden = true
-		if shouldAnnounce then
-			self.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce = true
-		end
-		self:Debugf(
-			"quest",
-			"Deferring task area refresh while world map is visible announce=%s",
-			SafeText(shouldAnnounce, "false")
-		)
-		self:ScheduleDeferredTaskAreaRefreshAfterMapHidden()
-		return false
+	local pendingAnnounce = self.GetRuntimeFlag
+		and self:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
+		or self.pendingScheduledTaskAreaRefreshShouldAnnounce
+	local resolvedShouldAnnounce = shouldAnnounce or (pendingAnnounce and true or false)
+	if self.SetRuntimeFlag then
+		self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false)
+	else
+		self.pendingScheduledTaskAreaRefreshShouldAnnounce = false
 	end
-
-	local resolvedShouldAnnounce = shouldAnnounce
-	if self.pendingTaskAreaRefreshShouldAnnounce or self.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce then
-		resolvedShouldAnnounce = true
-	end
-	self.pendingTaskAreaRefresh = false
-	self.pendingTaskAreaRefreshShouldAnnounce = false
-	self.pendingTaskAreaRefreshAfterMapHidden = false
-	self.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce = false
 
 	self:RefreshWorldQuestAreaState(resolvedShouldAnnounce)
 	self:RefreshBonusObjectiveAreaState(resolvedShouldAnnounce)
@@ -870,29 +788,8 @@ function QuestTogether:RefreshTaskAreaStates(shouldAnnounce)
 end
 
 function QuestTogether:PLAYER_REGEN_ENABLED()
-	if self.pendingQuestLogTaskDrain then
-		if IsWorldMapVisible(self) then
-			self:Debugf(
-				"quest",
-				"Deferring queued quest log tasks while world map is visible count=%d",
-				type(self.onQuestLogUpdate) == "table" and #self.onQuestLogUpdate or 0
-			)
-			self:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
-		else
-			self.pendingQuestLogTaskDrain = false
-			local drainedCount = DrainQueuedQuestLogTasks(self)
-			if drainedCount > 0 then
-				self:Debugf("quest", "Resuming deferred quest log tasks after combat count=%d", drainedCount)
-			end
-		end
-	end
-
-	if self.pendingTaskAreaRefresh then
-		local shouldAnnounce = self.pendingTaskAreaRefreshShouldAnnounce and true or false
-		self:Debugf("quest", "Resuming deferred task area refresh announce=%s", SafeText(shouldAnnounce, "false"))
-		self.pendingTaskAreaRefresh = false
-		self.pendingTaskAreaRefreshShouldAnnounce = false
-		self:RefreshTaskAreaStates(shouldAnnounce)
+	if self.FlushDeferredWork then
+		self:FlushDeferredWork("PLAYER_REGEN_ENABLED")
 	end
 end
 
@@ -990,24 +887,7 @@ end
 
 function QuestTogether:SUPER_TRACKING_CHANGED()
 	self:Debug("SUPER_TRACKING_CHANGED()", "events")
-	if self.pendingSuperTrackingTaskAreaRefresh then
-		return
-	end
-
-	local delayFn = self.API and self.API.Delay
-	if type(delayFn) ~= "function" then
-		self:RefreshTaskAreaStates(true)
-		return
-	end
-
-	self.pendingSuperTrackingTaskAreaRefresh = true
-	delayFn(0, function()
-		QuestTogether.pendingSuperTrackingTaskAreaRefresh = false
-		if not QuestTogether.isEnabled then
-			return
-		end
-		QuestTogether:RefreshTaskAreaStates(true)
-	end)
+	self:ScheduleTaskAreaRefresh(true, 0)
 end
 
 -- UNIT_QUEST_LOG_CHANGED indicates objective and completion changes.
@@ -1160,26 +1040,18 @@ function QuestTogether:UNIT_QUEST_LOG_CHANGED(_, unit)
 end
 
 function QuestTogether:QUEST_LOG_UPDATE()
-	local inCombatLockdown = self.API and self.API.InCombatLockdown and self.API.InCombatLockdown()
-	local worldMapVisible = IsWorldMapVisible(self)
-	if inCombatLockdown or worldMapVisible then
-		if type(self.onQuestLogUpdate) == "table" and #self.onQuestLogUpdate > 0 then
-			self.pendingQuestLogTaskDrain = true
-			if inCombatLockdown then
-				self:Debugf("quest", "Deferring queued quest log tasks during combat count=%d", #self.onQuestLogUpdate)
-			else
-				self:Debugf("quest", "Deferring queued quest log tasks while world map is visible count=%d", #self.onQuestLogUpdate)
-				self:ScheduleDeferredQuestLogTaskDrainAfterMapHidden()
+	if type(self.onQuestLogUpdate) == "table" and #self.onQuestLogUpdate > 0 then
+		if self.ScheduleQuestLogTaskDrain then
+			self:ScheduleQuestLogTaskDrain("QUEST_LOG_UPDATE")
+		else
+			local drainedCount = DrainQueuedQuestLogTasks(self)
+			if drainedCount > 0 then
+				self:Debugf("quest", "Drained queued quest log tasks count=%d", drainedCount)
 			end
-		end
-	else
-		local drainedCount = DrainQueuedQuestLogTasks(self)
-		if drainedCount > 0 then
-			self:Debugf("quest", "Drained queued quest log tasks count=%d", drainedCount)
 		end
 	end
 
-	self:RefreshTaskAreaStates(true)
+	self:ScheduleTaskAreaRefresh(true, 0)
 end
 
 function QuestTogether:QUEST_POI_UPDATE()

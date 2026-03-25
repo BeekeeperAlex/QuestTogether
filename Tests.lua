@@ -114,23 +114,10 @@ local function WithIsolatedState(testFn)
 	local originalPartyRosterFingerprint = QuestTogether.partyRosterFingerprint
 	local originalIsEnabled = QuestTogether.isEnabled
 	local originalProfileEnabled = QuestTogether.db.profile.enabled
-	local originalWorldQuestAreaStateByQuestID = QuestTogether.worldQuestAreaStateByQuestID
-	local originalBonusObjectiveAreaStateByQuestID = QuestTogether.bonusObjectiveAreaStateByQuestID
-	local originalNameplateQuestStateByGuid = QuestTogether.nameplateQuestStateByGuid
-	local originalNameplateQuestStateByUnitToken = QuestTogether.nameplateQuestStateByUnitToken
-	local originalNameplateQuestGuidByUnitToken = QuestTogether.nameplateQuestGuidByUnitToken
+	local originalRuntimeStateStore = QuestTogether.runtimeStateStore
 	local originalNameplateTooltipGuidByUnitToken = QuestTogether.nameplateTooltipGuidByUnitToken
-	local originalNameplateQuestTitleCache = QuestTogether.nameplateQuestTitleCache
 	local originalNameplateScanTooltip = QuestTogether.nameplateScanTooltip
-	local originalNameplateHealthOverlayByUnitFrame = QuestTogether.nameplateHealthOverlayByUnitFrame
-	local originalNameplateBubbleByUnitFrame = QuestTogether.nameplateBubbleByUnitFrame
-	local originalNameplateBubbleStateByFrame = QuestTogether.nameplateBubbleStateByFrame
-	local originalNameplateRefreshPendingByUnitToken = QuestTogether.nameplateRefreshPendingByUnitToken
-	local originalNameplateHealthTintRefreshPendingByUnitToken =
-		QuestTogether.nameplateHealthTintRefreshPendingByUnitToken
-	local originalNameplateHealthTintRetryCountByUnitToken = QuestTogether.nameplateHealthTintRetryCountByUnitToken
 	local originalAnnouncementBubbleScreenHostFrame = QuestTogether.announcementBubbleScreenHostFrame
-	local originalPersonalBubbleDialogPositionByFrame = QuestTogether.personalBubbleDialogPositionByFrame
 	local originalAnnouncementChannelLocalID = QuestTogether.announcementChannelLocalID
 	local originalPendingPingRequests = QuestTogether.pendingPingRequests
 	local originalPendingQuestCompareRequests = QuestTogether.pendingQuestCompareRequests
@@ -148,6 +135,8 @@ local function WithIsolatedState(testFn)
 	local originalPendingDeferredNameplateQuestStateRefresh = QuestTogether.pendingDeferredNameplateQuestStateRefresh
 	local originalDeferredNameplateQuestStateRefreshGeneration =
 		QuestTogether.deferredNameplateQuestStateRefreshGeneration
+	local originalDeferredWorkState = QuestTogether.deferredWorkState
+	local originalPendingWaypointIntent = QuestTogether.pendingWaypointIntent
 
 	if QuestTogether.UnregisterRuntimeEvents then
 		QuestTogether:UnregisterRuntimeEvents()
@@ -172,22 +161,25 @@ local function WithIsolatedState(testFn)
 	QuestTogether.partyMembers = {}
 	QuestTogether.partyMemberOrder = {}
 	QuestTogether.partyRosterFingerprint = ""
-	QuestTogether.worldQuestAreaStateByQuestID = {}
-	QuestTogether.bonusObjectiveAreaStateByQuestID = {}
-	QuestTogether.nameplateQuestStateByGuid = {}
-	QuestTogether.nameplateQuestStateByUnitToken = {}
-	QuestTogether.nameplateQuestGuidByUnitToken = {}
+	QuestTogether.runtimeStateStore = nil
+	if QuestTogether.EnsureRuntimeStateStore then
+		QuestTogether:EnsureRuntimeStateStore()
+	end
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+	if QuestTogether.ResetNameplateStateStore then
+		QuestTogether:ResetNameplateStateStore()
+	end
+	if QuestTogether.ResetRuntimeWorkStateStore then
+		QuestTogether:ResetRuntimeWorkStateStore()
+	end
+	if QuestTogether.SyncLegacyRuntimeStateAliases then
+		QuestTogether:SyncLegacyRuntimeStateAliases()
+	end
 	QuestTogether.nameplateTooltipGuidByUnitToken = nil
-	QuestTogether.nameplateQuestTitleCache = {}
 	QuestTogether.nameplateScanTooltip = nil
-	QuestTogether.nameplateHealthOverlayByUnitFrame = setmetatable({}, { __mode = "k" })
-	QuestTogether.nameplateBubbleByUnitFrame = setmetatable({}, { __mode = "k" })
-	QuestTogether.nameplateBubbleStateByFrame = setmetatable({}, { __mode = "k" })
-	QuestTogether.nameplateRefreshPendingByUnitToken = {}
-	QuestTogether.nameplateHealthTintRefreshPendingByUnitToken = {}
-	QuestTogether.nameplateHealthTintRetryCountByUnitToken = {}
 	QuestTogether.announcementBubbleScreenHostFrame = nil
-	QuestTogether.personalBubbleDialogPositionByFrame = setmetatable({}, { __mode = "k" })
 	QuestTogether.announcementChannelLocalID = nil
 	QuestTogether.pendingPingRequests = {}
 	QuestTogether.pendingQuestCompareRequests = {}
@@ -197,10 +189,7 @@ local function WithIsolatedState(testFn)
 	QuestTogether.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce = false
 	QuestTogether.taskAreaMapVisibilityRetryPending = false
 	QuestTogether.pendingScheduledTaskAreaRefresh = false
-	QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = false
 	QuestTogether.pendingSuperTrackingTaskAreaRefresh = false
-	QuestTogether.pendingDeferredNameplateQuestStateRefresh = false
-	QuestTogether.deferredNameplateQuestStateRefreshGeneration = 0
 
 	local ok, err = pcall(testFn)
 
@@ -240,23 +229,13 @@ local function WithIsolatedState(testFn)
 		QuestTogether.db.profile.enabled = originalProfileEnabled
 	end
 	QuestTogether.isEnabled = originalIsEnabled
-	QuestTogether.worldQuestAreaStateByQuestID = originalWorldQuestAreaStateByQuestID
-	QuestTogether.bonusObjectiveAreaStateByQuestID = originalBonusObjectiveAreaStateByQuestID
-	QuestTogether.nameplateQuestStateByGuid = originalNameplateQuestStateByGuid
-	QuestTogether.nameplateQuestStateByUnitToken = originalNameplateQuestStateByUnitToken
-	QuestTogether.nameplateQuestGuidByUnitToken = originalNameplateQuestGuidByUnitToken
+	QuestTogether.runtimeStateStore = originalRuntimeStateStore
+	if QuestTogether.SyncLegacyRuntimeStateAliases then
+		QuestTogether:SyncLegacyRuntimeStateAliases()
+	end
 	QuestTogether.nameplateTooltipGuidByUnitToken = originalNameplateTooltipGuidByUnitToken
-	QuestTogether.nameplateQuestTitleCache = originalNameplateQuestTitleCache
 	QuestTogether.nameplateScanTooltip = originalNameplateScanTooltip
-	QuestTogether.nameplateHealthOverlayByUnitFrame = originalNameplateHealthOverlayByUnitFrame
-	QuestTogether.nameplateBubbleByUnitFrame = originalNameplateBubbleByUnitFrame
-	QuestTogether.nameplateBubbleStateByFrame = originalNameplateBubbleStateByFrame
-	QuestTogether.nameplateRefreshPendingByUnitToken = originalNameplateRefreshPendingByUnitToken
-	QuestTogether.nameplateHealthTintRefreshPendingByUnitToken =
-		originalNameplateHealthTintRefreshPendingByUnitToken
-	QuestTogether.nameplateHealthTintRetryCountByUnitToken = originalNameplateHealthTintRetryCountByUnitToken
 	QuestTogether.announcementBubbleScreenHostFrame = originalAnnouncementBubbleScreenHostFrame
-	QuestTogether.personalBubbleDialogPositionByFrame = originalPersonalBubbleDialogPositionByFrame
 	QuestTogether.announcementChannelLocalID = originalAnnouncementChannelLocalID
 	QuestTogether.pendingPingRequests = originalPendingPingRequests
 	QuestTogether.pendingQuestCompareRequests = originalPendingQuestCompareRequests
@@ -267,12 +246,38 @@ local function WithIsolatedState(testFn)
 		originalPendingTaskAreaRefreshAfterMapHiddenShouldAnnounce
 	QuestTogether.taskAreaMapVisibilityRetryPending = originalTaskAreaMapVisibilityRetryPending
 	QuestTogether.pendingScheduledTaskAreaRefresh = originalPendingScheduledTaskAreaRefresh
-	QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce =
-		originalPendingScheduledTaskAreaRefreshShouldAnnounce
 	QuestTogether.pendingSuperTrackingTaskAreaRefresh = originalPendingSuperTrackingTaskAreaRefresh
-	QuestTogether.pendingDeferredNameplateQuestStateRefresh = originalPendingDeferredNameplateQuestStateRefresh
-	QuestTogether.deferredNameplateQuestStateRefreshGeneration =
-		originalDeferredNameplateQuestStateRefreshGeneration
+	if QuestTogether.SetRuntimeFlag then
+		QuestTogether:SetRuntimeFlag(
+			"pendingScheduledTaskAreaRefreshShouldAnnounce",
+			originalPendingScheduledTaskAreaRefreshShouldAnnounce
+		)
+		QuestTogether:SetRuntimeFlag(
+			"pendingDeferredNameplateQuestStateRefresh",
+			originalPendingDeferredNameplateQuestStateRefresh
+		)
+		QuestTogether:SetRuntimeFlag(
+			"deferredNameplateQuestStateRefreshGeneration",
+			originalDeferredNameplateQuestStateRefreshGeneration
+		)
+	else
+		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce =
+			originalPendingScheduledTaskAreaRefreshShouldAnnounce
+		QuestTogether.pendingDeferredNameplateQuestStateRefresh = originalPendingDeferredNameplateQuestStateRefresh
+		QuestTogether.deferredNameplateQuestStateRefreshGeneration =
+			originalDeferredNameplateQuestStateRefreshGeneration
+	end
+	if QuestTogether.SetPendingWaypointIntent then
+		QuestTogether:SetPendingWaypointIntent(originalPendingWaypointIntent)
+	else
+		QuestTogether.pendingWaypointIntent = originalPendingWaypointIntent
+	end
+	if QuestTogether.GetRuntimeWorkStateStore then
+		QuestTogether:GetRuntimeWorkStateStore().deferredWorkState = originalDeferredWorkState
+		QuestTogether.deferredWorkState = originalDeferredWorkState
+	else
+		QuestTogether.deferredWorkState = originalDeferredWorkState
+	end
 
 	if originalIsEnabled then
 		if QuestTogether.RegisterRuntimeEvents then
@@ -547,8 +552,8 @@ end)
 
 QuestTogether:RegisterTest("task area refresh defers during combat and resumes on regen", function()
 	local refreshCalls = {}
-	QuestTogether.pendingTaskAreaRefresh = nil
-	QuestTogether.pendingTaskAreaRefreshShouldAnnounce = nil
+	local deferredEntry = nil
+	QuestTogether.isEnabled = true
 
 	QuestTogether.API = CreateApiWithOverrides({
 		InCombatLockdown = function()
@@ -564,8 +569,9 @@ QuestTogether:RegisterTest("task area refresh defers during combat and resumes o
 		end, function()
 			AssertFalse(QuestTogether:RefreshTaskAreaStates(true))
 			AssertEquals(#refreshCalls, 0)
-			AssertTrue(QuestTogether.pendingTaskAreaRefresh)
-			AssertTrue(QuestTogether.pendingTaskAreaRefreshShouldAnnounce)
+			deferredEntry = QuestTogether:GetDeferredWorkStateStore().entries["task_area_refresh::task_area_refresh"]
+			AssertTrue(deferredEntry ~= nil)
+			AssertTrue(QuestTogether:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false))
 
 			QuestTogether.API = CreateApiWithOverrides({
 				InCombatLockdown = function()
@@ -576,55 +582,45 @@ QuestTogether:RegisterTest("task area refresh defers during combat and resumes o
 			QuestTogether:PLAYER_REGEN_ENABLED()
 			AssertEquals(refreshCalls[1], "world:true")
 			AssertEquals(refreshCalls[2], "bonus:true")
-			AssertFalse(QuestTogether.pendingTaskAreaRefresh)
-			AssertFalse(QuestTogether.pendingTaskAreaRefreshShouldAnnounce)
+			AssertEquals(QuestTogether:GetDeferredWorkStateStore().entries["task_area_refresh::task_area_refresh"], nil)
+			AssertFalse(QuestTogether:GetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", false))
 		end)
 	end)
 end)
 
-QuestTogether:RegisterTest("task area refresh defers while world map is visible and resumes after it closes", function()
+QuestTogether:RegisterTest("task area refresh defers through runtime gate and resumes when it clears", function()
 	local refreshCalls = {}
-	local delayedCallbacks = {}
-	local mapVisible = true
 
 	QuestTogether.isEnabled = true
-	QuestTogether.pendingTaskAreaRefreshAfterMapHidden = nil
-	QuestTogether.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce = nil
-	QuestTogether.taskAreaMapVisibilityRetryPending = nil
-
 	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
-			return false
-		end,
-		IsWorldMapVisible = function()
-			return mapVisible
-		end,
 		Delay = function(_, callback)
-			delayedCallbacks[#delayedCallbacks + 1] = callback
+			callback()
 		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "RefreshWorldQuestAreaState", function(_, shouldAnnounce)
-		refreshCalls[#refreshCalls + 1] = "world:" .. tostring(shouldAnnounce)
+	WithPatchedMethod(QuestTogether, "IsWorkBlocked", function(_, workClass)
+		return workClass == "task_area_refresh"
 	end, function()
-		WithPatchedMethod(QuestTogether, "RefreshBonusObjectiveAreaState", function(_, shouldAnnounce)
-			refreshCalls[#refreshCalls + 1] = "bonus:" .. tostring(shouldAnnounce)
+		WithPatchedMethod(QuestTogether, "RefreshWorldQuestAreaState", function(_, shouldAnnounce)
+			refreshCalls[#refreshCalls + 1] = "world:" .. tostring(shouldAnnounce)
 		end, function()
-			AssertFalse(QuestTogether:RefreshTaskAreaStates(true))
-			AssertEquals(#refreshCalls, 0)
-			AssertTrue(QuestTogether.pendingTaskAreaRefreshAfterMapHidden)
-			AssertTrue(QuestTogether.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce)
-			AssertEquals(#delayedCallbacks, 1)
+			WithPatchedMethod(QuestTogether, "RefreshBonusObjectiveAreaState", function(_, shouldAnnounce)
+				refreshCalls[#refreshCalls + 1] = "bonus:" .. tostring(shouldAnnounce)
+			end, function()
+				AssertFalse(QuestTogether:RefreshTaskAreaStates(true))
+				AssertEquals(#refreshCalls, 0)
 
-			mapVisible = false
-			delayedCallbacks[1]()
-
-			AssertEquals(refreshCalls[1], "world:true")
-			AssertEquals(refreshCalls[2], "bonus:true")
-			AssertFalse(QuestTogether.pendingTaskAreaRefreshAfterMapHidden)
-			AssertFalse(QuestTogether.pendingTaskAreaRefreshAfterMapHiddenShouldAnnounce)
+				WithPatchedMethod(QuestTogether, "IsWorkBlocked", function()
+					return false
+				end, function()
+					QuestTogether:FlushDeferredWork("task_area_runtime_gate")
+				end)
+			end)
 		end)
 	end)
+
+	AssertEquals(refreshCalls[1], "world:true")
+	AssertEquals(refreshCalls[2], "bonus:true")
 end)
 
 QuestTogether:RegisterTest("task area snapshot falls back to IsWorldQuest when questInfo world flag is falsey", function()
@@ -1148,14 +1144,18 @@ QuestTogether:RegisterTest("quest-blob state change refreshes task area states w
 
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
-			AssertEquals(seconds, 0)
 			scheduledCalls = scheduledCalls + 1
+			AssertEquals(seconds, 0)
 			callback()
 		end,
 	})
 	QuestTogether.isEnabled = true
 	QuestTogether.pendingScheduledTaskAreaRefresh = nil
-	QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = nil
+	if QuestTogether.SetRuntimeFlag then
+		QuestTogether:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", nil)
+	else
+		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = nil
+	end
 
 	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function(_, shouldAnnounce)
 		AssertTrue(shouldAnnounce)
@@ -1164,7 +1164,7 @@ QuestTogether:RegisterTest("quest-blob state change refreshes task area states w
 		QuestTogether:PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED("PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED", 22233, true)
 	end)
 
-	AssertEquals(scheduledCalls, 1)
+	AssertEquals(scheduledCalls, 0)
 	AssertEquals(refreshCalls, 1)
 end)
 
@@ -1308,7 +1308,11 @@ end)
 
 QuestTogether:RegisterTest("world quest area refresh publishes enter and leave events from snapshot diffs", function()
 	local events = {}
-	QuestTogether.worldQuestAreaStateByQuestID = {}
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	else
+		QuestTogether.worldQuestAreaStateByQuestID = {}
+	end
 
 	local activeSnapshot = {}
 	WithPatchedMethod(QuestTogether, "GetActiveWorldQuestAreaSnapshot", function()
@@ -1345,13 +1349,12 @@ QuestTogether:RegisterTest("super tracking changed defers task area refresh off 
 
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
-			AssertEquals(seconds, 0)
 			scheduledCalls = scheduledCalls + 1
+			AssertEquals(seconds, 0)
 			callback()
 		end,
 	})
 	QuestTogether.isEnabled = true
-	QuestTogether.pendingSuperTrackingTaskAreaRefresh = nil
 
 	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function(_, shouldAnnounce)
 		AssertTrue(shouldAnnounce)
@@ -1360,7 +1363,7 @@ QuestTogether:RegisterTest("super tracking changed defers task area refresh off 
 		QuestTogether:SUPER_TRACKING_CHANGED()
 	end)
 
-	AssertEquals(scheduledCalls, 1)
+	AssertEquals(scheduledCalls, 0)
 	AssertEquals(refreshCalls, 1)
 end)
 
@@ -1370,14 +1373,17 @@ QuestTogether:RegisterTest("quest poi update defers task area refresh off the li
 
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
-			AssertEquals(seconds, 0)
 			scheduledCalls = scheduledCalls + 1
+			AssertEquals(seconds, 0)
 			callback()
 		end,
 	})
 	QuestTogether.isEnabled = true
-	QuestTogether.pendingScheduledTaskAreaRefresh = nil
-	QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = nil
+	if QuestTogether.SetRuntimeFlag then
+		QuestTogether:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", nil)
+	else
+		QuestTogether.pendingScheduledTaskAreaRefreshShouldAnnounce = nil
+	end
 
 	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function(_, shouldAnnounce)
 		AssertTrue(shouldAnnounce)
@@ -1386,15 +1392,15 @@ QuestTogether:RegisterTest("quest poi update defers task area refresh off the li
 		QuestTogether:QUEST_POI_UPDATE()
 	end)
 
-	AssertEquals(scheduledCalls, 1)
+	AssertEquals(scheduledCalls, 0)
 	AssertEquals(refreshCalls, 1)
 end)
 
 QuestTogether:RegisterTest("quest log queued tasks defer during combat and resume on regen", function()
 	local ranTask = false
 	QuestTogether.onQuestLogUpdate = {}
-	QuestTogether.pendingQuestLogTaskDrain = nil
-	QuestTogether:QueueQuestLogTask(function()
+	QuestTogether.isEnabled = true
+	table.insert(QuestTogether.onQuestLogUpdate, function()
 		ranTask = true
 	end)
 
@@ -1411,7 +1417,6 @@ QuestTogether:RegisterTest("quest log queued tasks defer during combat and resum
 	end)
 
 	AssertFalse(ranTask)
-	AssertTrue(QuestTogether.pendingQuestLogTaskDrain)
 	AssertEquals(#QuestTogether.onQuestLogUpdate, 1)
 
 	QuestTogether.API = CreateApiWithOverrides({
@@ -1422,15 +1427,14 @@ QuestTogether:RegisterTest("quest log queued tasks defer during combat and resum
 	QuestTogether:PLAYER_REGEN_ENABLED()
 
 	AssertTrue(ranTask)
-	AssertFalse(QuestTogether.pendingQuestLogTaskDrain)
 	AssertEquals(#QuestTogether.onQuestLogUpdate, 0)
 end)
 
 QuestTogether:RegisterTest("quest log queued tasks drain immediately out of combat", function()
 	local runCount = 0
 	QuestTogether.onQuestLogUpdate = {}
-	QuestTogether.pendingQuestLogTaskDrain = nil
-	QuestTogether:QueueQuestLogTask(function()
+	QuestTogether.isEnabled = true
+	table.insert(QuestTogether.onQuestLogUpdate, function()
 		runCount = runCount + 1
 	end)
 
@@ -1448,56 +1452,44 @@ QuestTogether:RegisterTest("quest log queued tasks drain immediately out of comb
 
 	AssertEquals(runCount, 1)
 	AssertEquals(#QuestTogether.onQuestLogUpdate, 0)
-	AssertFalse(QuestTogether.pendingQuestLogTaskDrain)
 end)
 
-QuestTogether:RegisterTest("quest log queued tasks defer while world map is visible and resume after it closes", function()
+QuestTogether:RegisterTest("quest log queued tasks defer through runtime gate and resume when it clears", function()
 	local ranTask = false
-	local scheduledCallbacks = {}
-	local worldMapVisible = true
 
 	QuestTogether.onQuestLogUpdate = {}
-	QuestTogether.pendingQuestLogTaskDrain = nil
-	QuestTogether.questLogTaskMapVisibilityRetryPending = nil
 	QuestTogether.isEnabled = true
-	QuestTogether:QueueQuestLogTask(function()
+	table.insert(QuestTogether.onQuestLogUpdate, function()
 		ranTask = true
 	end)
 
 	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
-			return false
-		end,
-		IsWorldMapVisible = function()
-			return worldMapVisible
-		end,
-		Delay = function(seconds, callback)
-			scheduledCallbacks[#scheduledCallbacks + 1] = {
-				seconds = seconds,
-				callback = callback,
-			}
+		Delay = function(_, callback)
+			callback()
 		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function()
-		return false
+	WithPatchedMethod(QuestTogether, "IsWorkBlocked", function(_, workClass)
+		return workClass == "quest_log_drain"
 	end, function()
-		QuestTogether:QUEST_LOG_UPDATE()
+		WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function()
+			return false
+		end, function()
+			QuestTogether:QUEST_LOG_UPDATE()
+		end)
 	end)
 
 	AssertFalse(ranTask)
-	AssertTrue(QuestTogether.pendingQuestLogTaskDrain)
 	AssertEquals(#QuestTogether.onQuestLogUpdate, 1)
-	AssertEquals(#scheduledCallbacks, 1)
-	AssertEquals(scheduledCallbacks[1].seconds, 0.2)
 
-	worldMapVisible = false
-	scheduledCallbacks[1].callback()
+	WithPatchedMethod(QuestTogether, "IsWorkBlocked", function()
+		return false
+	end, function()
+		QuestTogether:FlushDeferredWork("quest_log_runtime_gate")
+	end)
 
 	AssertTrue(ranTask)
-	AssertFalse(QuestTogether.pendingQuestLogTaskDrain)
 	AssertEquals(#QuestTogether.onQuestLogUpdate, 0)
-	AssertFalse(QuestTogether.questLogTaskMapVisibilityRetryPending)
 end)
 
 QuestTogether:RegisterTest("quest status uses ready to turn in announcement event", function()
@@ -2124,7 +2116,7 @@ QuestTogether:RegisterTest("tooltip quest detection does not iterate tooltip arg
 	end)
 end)
 
-QuestTogether:RegisterTest("tooltip quest detection still uses live structured scans in combat", function()
+QuestTogether:RegisterTest("tooltip quest detection blocks live structured scans in combat", function()
 	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
 	QuestTogether.API = CreateApiWithOverrides({
 		InCombatLockdown = function()
@@ -2142,24 +2134,15 @@ QuestTogether:RegisterTest("tooltip quest detection still uses live structured s
 				return "Creature-0-0-0-0-12345-0000000000"
 			end, function()
 				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-					return nil
+					error("combat runtime gate should not touch Questie or tooltip APIs")
 				end, function()
-					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function(_, unitToken, unitGuid)
-						AssertEquals(unitToken, "nameplate1")
-						AssertEquals(unitGuid, "Creature-0-0-0-0-12345-0000000000")
-						return {
-							{
-								leftText = "Tracking the Trail",
-							},
-							{
-								leftText = "1/8 Digested Object",
-							},
-						}
+					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
+						error("combat runtime gate should not touch live structured tooltip scans")
 					end, function()
 						WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
-							error("legacy hidden tooltip fallback should not run on structured-tooltip clients")
+							error("combat runtime gate should not touch hidden tooltip fallback")
 						end, function()
-							AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+							AssertFalse(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
 						end)
 					end)
 				end)
@@ -2168,47 +2151,11 @@ QuestTogether:RegisterTest("tooltip quest detection still uses live structured s
 	end)
 end)
 
-QuestTogether:RegisterTest("tooltip quest detection reuses cached state while world map widgets are active", function()
+QuestTogether:RegisterTest("tooltip quest detection reuses cached state while runtime gate blocks live scans", function()
 	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
 	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-12345-0000000000"] = true
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate1"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return true
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
-		return true
-	end, function()
-		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
-			return false
-		end, function()
-				WithPatchedMethod(QuestTogether, "GetNameplateTooltipScanGuid", function()
-					return "Creature-0-0-0-0-12345-0000000000"
-				end, function()
-					WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-						error("world-map-visible detection should not touch Questie or tooltip APIs")
-					end, function()
-						WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function(_, unitToken, unitGuid)
-							error("world-map-visible detection should not touch live structured tooltip scans")
-						end, function()
-							AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
-						end)
-					end)
-				end)
-		end)
-	end)
-end)
-
-QuestTogether:RegisterTest("tooltip quest detection skips live scans while world map widgets are active without cache", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return true
-		end,
-	})
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -2219,16 +2166,50 @@ QuestTogether:RegisterTest("tooltip quest detection skips live scans while world
 			WithPatchedMethod(QuestTogether, "GetNameplateTooltipScanGuid", function()
 				return "Creature-0-0-0-0-12345-0000000000"
 			end, function()
-				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-					error("world-map-visible detection should not touch Questie or tooltip APIs")
+				WithPatchedMethod(QuestTogether, "IsWorkBlocked", function(_, workClass)
+					return workClass == "nameplate_tooltip_resolve"
 				end, function()
-					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
-						error("world-map-visible detection should not touch live structured tooltip scans")
+					WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
+						error("runtime-gated detection should not touch Questie or tooltip APIs")
 					end, function()
-						WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
-							error("world-map-visible detection should not touch hidden tooltip scans")
+						WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
+							error("runtime-gated detection should not touch live structured tooltip scans")
 						end, function()
-							AssertFalse(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+							AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+						end)
+					end)
+				end)
+			end)
+		end)
+	end)
+end)
+
+QuestTogether:RegisterTest("tooltip quest detection skips live scans while runtime gate blocks them without cache", function()
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+
+	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
+		return true
+	end, function()
+		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+			return false
+		end, function()
+			WithPatchedMethod(QuestTogether, "GetNameplateTooltipScanGuid", function()
+				return "Creature-0-0-0-0-12345-0000000000"
+			end, function()
+				WithPatchedMethod(QuestTogether, "IsWorkBlocked", function(_, workClass)
+					return workClass == "nameplate_tooltip_resolve"
+				end, function()
+					WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
+						error("runtime-gated detection should not touch Questie or tooltip APIs")
+					end, function()
+						WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
+							error("runtime-gated detection should not touch live structured tooltip scans")
+						end, function()
+							WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
+								error("runtime-gated detection should not touch hidden tooltip scans")
+							end, function()
+								AssertFalse(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+							end)
 						end)
 					end)
 				end)
@@ -2289,9 +2270,12 @@ QuestTogether:RegisterTest("nameplate quest detection cache is keyed by guid and
 	end)
 end)
 
-QuestTogether:RegisterTest("tooltip quest detection rescans in combat instead of reusing cached results", function()
+QuestTogether:RegisterTest("tooltip quest detection reuses cached results in combat instead of rescanning", function()
 	local structuredScanCount = 0
 	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-12345-0000000000"] = true
+	QuestTogether.nameplateQuestStateByUnitToken["nameplate1"] = true
+	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
 	QuestTogether.API = CreateApiWithOverrides({
 		InCombatLockdown = function()
 			return true
@@ -2308,31 +2292,22 @@ QuestTogether:RegisterTest("tooltip quest detection rescans in combat instead of
 				return "Creature-0-0-0-0-12345-0000000000"
 			end, function()
 				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-					return nil
+					error("combat runtime gate should reuse cached state instead of scanning")
 				end, function()
 					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
 						structuredScanCount = structuredScanCount + 1
-						if structuredScanCount == 1 then
-							return nil
-						end
-						return {
-							{
-								leftText = "Tracking the Trail",
-							},
-							{
-								leftText = "1/8 Digested Object",
-							},
-						}
+						error("combat runtime gate should reuse cached state instead of rescanning")
 					end, function()
-						AssertFalse(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
 						AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+						AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+						AssertEquals(structuredScanCount, 0)
 					end)
 				end)
 			end)
 		end)
 	end)
 
-	AssertEquals(structuredScanCount, 2)
+	AssertEquals(structuredScanCount, 0)
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection rescans after an initial false result", function()
@@ -4279,7 +4254,7 @@ QuestTogether:RegisterTest("nameplate health tint schedules a bounded retry when
 
 	AssertEquals(scheduledUnitToken, "nameplate1")
 	AssertEquals(scheduledDelay, 0.05)
-	AssertEquals(QuestTogether.nameplateHealthTintRetryCountByUnitToken["nameplate1"], 1)
+	AssertEquals(QuestTogether.nameplateHealthTintRetryCountByUnitToken["nameplate1"], nil)
 end)
 
 QuestTogether:RegisterTest("nameplate icon refresh schedules a short follow-up tint refresh for quest units", function()
@@ -4306,7 +4281,7 @@ QuestTogether:RegisterTest("nameplate icon refresh schedules a short follow-up t
 		WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function(_, unitToken, unitFrame, allowLiveScan)
 			AssertEquals(unitToken, "nameplate1")
 			AssertEquals(unitFrame, namePlateFrameBase.UnitFrame)
-			AssertEquals(allowLiveScan, true)
+			AssertEquals(allowLiveScan, false)
 			return true, true, "Creature-0-0-0-0-11111-0000000000"
 		end, function()
 			WithPatchedMethod(QuestTogether, "RefreshNameplateHealthTint", function(_, frameBase, isQuestObjective)
@@ -4349,7 +4324,7 @@ QuestTogether:RegisterTest("nameplate health tint uses resolved quest state from
 		WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function(_, unitToken, unitFrame, allowLiveScan)
 			AssertEquals(unitToken, "nameplate1")
 			AssertEquals(unitFrame, namePlateFrameBase.UnitFrame)
-			AssertEquals(allowLiveScan, true)
+			AssertEquals(allowLiveScan, false)
 			return true, true, "Creature-0-0-0-0-11111-0000000000"
 		end, function()
 			WithPatchedMethod(QuestTogether, "ApplyQuestTintToNameplate", function(_, unitFrame)
@@ -4398,7 +4373,7 @@ QuestTogether:RegisterTest("nameplate icon refresh resolves namePlateUnitToken l
 	WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function(_, unitToken, unitFrame, allowLiveScan)
 		resolvedUnitToken = unitToken
 		AssertEquals(unitFrame, namePlateFrameBase.UnitFrame)
-		AssertEquals(allowLiveScan, true)
+		AssertEquals(allowLiveScan, false)
 		return true, false, nil
 	end, function()
 		WithPatchedMethod(QuestTogether, "RefreshNameplateHealthTint", function() end, function()
@@ -4409,10 +4384,9 @@ QuestTogether:RegisterTest("nameplate icon refresh resolves namePlateUnitToken l
 	AssertEquals(resolvedUnitToken, "nameplate9")
 end)
 
-QuestTogether:RegisterTest("nameplate icon refresh defers entirely while world map widgets are active", function()
+QuestTogether:RegisterTest("nameplate icon refresh uses cached state without queuing resolver", function()
 	local appliedQuestState = nil
-	local scheduledReason = nil
-	local scheduledDelay = nil
+	local resolverUnitToken = nil
 	local namePlateFrameBase = {
 		UnitFrame = {
 			namePlateUnitToken = "nameplate9",
@@ -4425,35 +4399,28 @@ QuestTogether:RegisterTest("nameplate icon refresh defers entirely while world m
 	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-99999-0000000000"] = true
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate9"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate9"] = "Creature-0-0-0-0-99999-0000000000"
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return true
-		end,
-	})
 
 	WithPatchedMethod(QuestTogether, "ApplyResolvedQuestStateToNameplate", function(_, frameBase, unitToken, unitFrame, isQuestObjective, scheduleTintFollowUp)
 		appliedQuestState = isQuestObjective
 	end, function()
 		WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
-			error("world-map-visible icon refresh should not perform a live quest scan")
+			error("cached icon refresh should not perform a live quest scan")
 		end, function()
-			WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
-				scheduledReason = reason
-				scheduledDelay = delaySeconds
+			WithPatchedMethod(QuestTogether, "ScheduleNameplateTooltipResolution", function(_, unitToken)
+				resolverUnitToken = unitToken
 			end, function()
 				QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 			end)
 		end)
 	end)
 
-	AssertEquals(appliedQuestState, nil)
-	AssertEquals(scheduledReason, "RefreshNameplateIconWorldMapVisible")
-	AssertEquals(scheduledDelay, 0.2)
+	AssertEquals(appliedQuestState, true)
+	AssertEquals(resolverUnitToken, nil)
 end)
 
-QuestTogether:RegisterTest("nameplate icon refresh defers live quest scan while world map widgets are active", function()
-	local scheduledReason = nil
-	local scheduledDelay = nil
+QuestTogether:RegisterTest("nameplate icon refresh queues resolver when cached state is missing", function()
+	local scheduledUnitToken = nil
+	local hiddenFrame = nil
 	local namePlateFrameBase = {
 		UnitFrame = {
 			namePlateUnitToken = "nameplate9",
@@ -4463,29 +4430,28 @@ QuestTogether:RegisterTest("nameplate icon refresh defers live quest scan while 
 	}
 
 	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return true
-		end,
-	})
 
 	WithPatchedMethod(QuestTogether, "ApplyResolvedQuestStateToNameplate", function()
-		error("world-map-visible icon refresh should not mutate from an uncached live scan")
+		error("uncached icon refresh should not mutate from an uncached live scan")
 	end, function()
 		WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
-			error("world-map-visible icon refresh should not perform a live quest scan")
+			error("uncached icon refresh should not perform a live quest scan")
 		end, function()
-			WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
-				scheduledReason = reason
-				scheduledDelay = delaySeconds
+			WithPatchedMethod(QuestTogether, "HideNameplateIcon", function(_, frameBase)
+				hiddenFrame = frameBase
 			end, function()
-				QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
+				WithPatchedMethod(QuestTogether, "ScheduleNameplateTooltipResolution", function(_, unitToken)
+					scheduledUnitToken = unitToken
+				end, function()
+					QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
+				end)
+			end, function()
 			end)
 		end)
 	end)
 
-	AssertEquals(scheduledReason, "RefreshNameplateIconWorldMapVisible")
-	AssertEquals(scheduledDelay, 0.2)
+	AssertEquals(hiddenFrame, namePlateFrameBase)
+	AssertEquals(scheduledUnitToken, "nameplate9")
 end)
 
 QuestTogether:RegisterTest("nameplate health tint no longer requires attackable units", function()
@@ -4641,7 +4607,7 @@ QuestTogether:RegisterTest("nameplate icon hide restores stale health tint when 
 		WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function(_, unitToken, candidateFrame, allowLiveScan)
 			AssertEquals(unitToken, "nameplate1")
 			AssertEquals(candidateFrame, unitFrame)
-			AssertEquals(allowLiveScan, true)
+			AssertEquals(allowLiveScan, false)
 			return true, false, "Creature-0-0-0-0-11111-0000000000"
 		end, function()
 			WithPatchedMethod(QuestTogether, "RefreshNameplateHealthTint", function(_, frameBase, isQuestObjective)
@@ -4780,12 +4746,10 @@ QuestTogether:RegisterTest("combat nameplate add clears stale visuals and refres
 	AssertEquals(refreshedFrame, namePlateFrameBase)
 end)
 
-QuestTogether:RegisterTest("world-map-visible nameplate add clears stale visuals and defers refresh", function()
+QuestTogether:RegisterTest("nameplate add clears stale visuals and refreshes immediately", function()
 	local hiddenFrame = nil
 	local refreshedFrame = nil
 	local scheduledUnitToken = nil
-	local scheduledReason = nil
-	local scheduledDelay = nil
 	local unitFrame = {
 		unit = "nameplate12",
 		healthBar = {},
@@ -4801,11 +4765,6 @@ QuestTogether:RegisterTest("world-map-visible nameplate add clears stale visuals
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate12"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate12"] = "Creature-0-0-0-0-121212-0000000000"
 	QuestTogether.nameplateHealthTintRetryCountByUnitToken["nameplate12"] = 1
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return true
-		end,
-	})
 
 	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
 		return unitToken == "nameplate12"
@@ -4824,12 +4783,7 @@ QuestTogether:RegisterTest("world-map-visible nameplate add clears stale visuals
 					WithPatchedMethod(QuestTogether, "ScheduleNameplateRefresh", function(_, unitToken)
 						scheduledUnitToken = unitToken
 					end, function()
-						WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
-							scheduledReason = reason
-							scheduledDelay = delaySeconds
-						end, function()
-							QuestTogether:OnNameplateAdded("nameplate12")
-						end)
+						QuestTogether:OnNameplateAdded("nameplate12")
 					end)
 				end)
 			end)
@@ -4840,10 +4794,8 @@ QuestTogether:RegisterTest("world-map-visible nameplate add clears stale visuals
 	AssertEquals(QuestTogether.nameplateQuestGuidByUnitToken["nameplate12"], nil)
 	AssertEquals(QuestTogether.nameplateHealthTintRetryCountByUnitToken["nameplate12"], nil)
 	AssertEquals(hiddenFrame, namePlateFrameBase)
-	AssertEquals(refreshedFrame, nil)
+	AssertEquals(refreshedFrame, namePlateFrameBase)
 	AssertEquals(scheduledUnitToken, nil)
-	AssertEquals(scheduledReason, "OnNameplateAddedWorldMapVisible")
-	AssertEquals(scheduledDelay, 0.2)
 end)
 
 QuestTogether:RegisterTest("combat nameplate remove clears cached quest state", function()
@@ -4894,34 +4846,32 @@ end)
 QuestTogether:RegisterTest("combat enter and leave schedule full nameplate refreshes", function()
 	local scheduled = {}
 
-	WithPatchedMethod(QuestTogether, "ScheduleFullNameplateRefresh", function(_, delaySeconds)
-		scheduled[#scheduled + 1] = delaySeconds
+	WithPatchedMethod(QuestTogether, "ScheduleNameplatePresentationRefresh", function(_, reason, delaySeconds)
+		scheduled[#scheduled + 1] = {
+			reason = reason,
+			delaySeconds = delaySeconds,
+		}
 	end, function()
 		QuestTogether:HandleNameplateEvent("PLAYER_REGEN_DISABLED")
 		QuestTogether:HandleNameplateEvent("PLAYER_REGEN_ENABLED")
 	end)
 
-	AssertEquals(scheduled[1], 0)
-	AssertEquals(scheduled[2], 0)
+	AssertEquals(scheduled[1].reason, "PLAYER_REGEN_DISABLED")
+	AssertEquals(scheduled[1].delaySeconds, 0)
+	AssertEquals(scheduled[2].reason, "PLAYER_REGEN_ENABLED")
+	AssertEquals(scheduled[2].delaySeconds, 0)
 	AssertEquals(#scheduled, 2)
 end)
 
-QuestTogether:RegisterTest("nameplate quest state refresh defers while world map widgets are active", function()
+QuestTogether:RegisterTest("nameplate quest state refresh uses scheduler and shared worker", function()
 	local rebuildCalls = 0
 	local clearCalls = 0
 	local augmentationCalls = 0
-	local scheduledDelay = nil
-	local scheduledCallback = nil
-	local mapVisible = true
 
 	QuestTogether.isEnabled = true
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(delaySeconds, callback)
-			scheduledDelay = delaySeconds
-			scheduledCallback = callback
-		end,
-		IsWorldMapVisible = function()
-			return mapVisible
+			callback()
 		end,
 	})
 
@@ -4934,16 +4884,7 @@ QuestTogether:RegisterTest("nameplate quest state refresh defers while world map
 			WithPatchedMethod(QuestTogether, "RefreshNameplateAugmentation", function()
 				augmentationCalls = augmentationCalls + 1
 			end, function()
-				AssertFalse(QuestTogether:RefreshNameplatesForQuestStateChange("QUEST_POI_UPDATE"))
-				AssertEquals(rebuildCalls, 0)
-				AssertEquals(clearCalls, 0)
-				AssertEquals(augmentationCalls, 0)
-				AssertEquals(scheduledDelay, 0.2)
-				AssertTrue(type(scheduledCallback) == "function")
-
-				mapVisible = false
-				scheduledCallback()
-
+				AssertTrue(QuestTogether:RefreshNameplatesForQuestStateChange("QUEST_POI_UPDATE"))
 				AssertEquals(rebuildCalls, 1)
 				AssertEquals(clearCalls, 1)
 				AssertEquals(augmentationCalls, 1)
@@ -4960,11 +4901,6 @@ QuestTogether:RegisterTest("nameplate quest state refresh clears guid detection 
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate1"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
 	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return false
-		end,
-	})
 
 	WithPatchedMethod(QuestTogether, "RebuildNameplateQuestTitleCache", function()
 		rebuildCalls = rebuildCalls + 1
@@ -4983,18 +4919,11 @@ QuestTogether:RegisterTest("nameplate quest state refresh clears guid detection 
 	AssertEquals(QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"], nil)
 end)
 
-QuestTogether:RegisterTest("visible nameplate refresh defers while world map widgets are active", function()
+QuestTogether:RegisterTest("visible nameplate refresh clears cache and refreshes immediately", function()
 	local clearCalls = 0
 	local augmentationCalls = 0
-	local scheduledReason = nil
-	local scheduledDelay = nil
 
 	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		IsWorldMapVisible = function()
-			return true
-		end,
-	})
 
 	WithPatchedMethod(QuestTogether, "ClearNameplateResolvedQuestState", function()
 		clearCalls = clearCalls + 1
@@ -5002,19 +4931,12 @@ QuestTogether:RegisterTest("visible nameplate refresh defers while world map wid
 		WithPatchedMethod(QuestTogether, "RefreshNameplateAugmentation", function()
 			augmentationCalls = augmentationCalls + 1
 		end, function()
-			WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
-				scheduledReason = reason
-				scheduledDelay = delaySeconds
-			end, function()
-				AssertFalse(QuestTogether:RefreshVisibleNameplates("PLAYER_ENTERING_WORLD"))
-			end)
+			AssertTrue(QuestTogether:RefreshVisibleNameplates("PLAYER_ENTERING_WORLD"))
 		end)
 	end)
 
-	AssertEquals(clearCalls, 0)
-	AssertEquals(augmentationCalls, 0)
-	AssertEquals(scheduledReason, "PLAYER_ENTERING_WORLD")
-	AssertEquals(scheduledDelay, 0.2)
+	AssertEquals(clearCalls, 1)
+	AssertEquals(augmentationCalls, 1)
 end)
 
 QuestTogether:RegisterTest("nameplate quest state events use Plater-style delayed refresh", function()
@@ -5029,7 +4951,11 @@ QuestTogether:RegisterTest("nameplate quest state events use Plater-style delaye
 		end,
 	})
 	QuestTogether.isEnabled = true
-	QuestTogether.pendingDeferredNameplateQuestStateRefresh = nil
+	if QuestTogether.SetRuntimeFlag then
+		QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", nil)
+	else
+		QuestTogether.pendingDeferredNameplateQuestStateRefresh = nil
+	end
 
 	WithPatchedMethod(QuestTogether, "RefreshNameplatesForQuestStateChange", function(_, reason)
 		AssertEquals(reason, "QUEST_POI_UPDATE")
@@ -5048,8 +4974,13 @@ QuestTogether:RegisterTest("nameplate quest state refresh coalesces like Plater 
 	local refreshCalls = 0
 
 	QuestTogether.isEnabled = true
-	QuestTogether.pendingDeferredNameplateQuestStateRefresh = false
-	QuestTogether.deferredNameplateQuestStateRefreshGeneration = 0
+	if QuestTogether.SetRuntimeFlag then
+		QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
+		QuestTogether:SetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
+	else
+		QuestTogether.pendingDeferredNameplateQuestStateRefresh = false
+		QuestTogether.deferredNameplateQuestStateRefreshGeneration = 0
+	end
 	QuestTogether.API = CreateApiWithOverrides({
 		Delay = function(seconds, callback)
 			AssertEquals(seconds, 1)
@@ -5087,55 +5018,33 @@ QuestTogether:RegisterTest("player entering world does not use Plater quest log 
 end)
 
 QuestTogether:RegisterTest("player entering world schedules delayed nameplate refresh like Plater", function()
-	local scheduledSeconds = nil
-	local scheduledCallback = nil
-	local scheduledRefreshDelay = nil
+	local scheduledReason = nil
+	local scheduledDelay = nil
 
-	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		Delay = function(seconds, callback)
-			scheduledSeconds = seconds
-			scheduledCallback = callback
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "ScheduleFullNameplateRefresh", function(_, delaySeconds)
-		scheduledRefreshDelay = delaySeconds
+	WithPatchedMethod(QuestTogether, "ScheduleNameplatePresentationRefresh", function(_, reason, delaySeconds)
+		scheduledReason = reason
+		scheduledDelay = delaySeconds
 	end, function()
 		QuestTogether:HandleNameplateEvent("PLAYER_ENTERING_WORLD")
-		AssertEquals(scheduledSeconds, 1)
-		AssertTrue(type(scheduledCallback) == "function")
-		scheduledCallback()
-		AssertEquals(scheduledRefreshDelay, 0)
 	end)
+
+	AssertEquals(scheduledReason, "PLAYER_ENTERING_WORLD")
+	AssertEquals(scheduledDelay, 1)
 end)
 
-QuestTogether:RegisterTest("zone changed new area retries after combat like Plater", function()
-	local scheduledSeconds = nil
-	local scheduledCallback = nil
-	local scheduledRefreshDelay = nil
+QuestTogether:RegisterTest("zone changed new area schedules nameplate presentation refresh through shared runtime", function()
+	local scheduledReason = nil
+	local scheduledDelay = nil
 
-	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
-			return true
-		end,
-		Delay = function(seconds, callback)
-			scheduledSeconds = seconds
-			scheduledCallback = callback
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "ScheduleFullNameplateRefresh", function(_, delaySeconds)
-		scheduledRefreshDelay = delaySeconds
+	WithPatchedMethod(QuestTogether, "ScheduleNameplatePresentationRefresh", function(_, reason, delaySeconds)
+		scheduledReason = reason
+		scheduledDelay = delaySeconds
 	end, function()
 		QuestTogether:HandleNameplateEvent("ZONE_CHANGED_NEW_AREA")
-		AssertEquals(scheduledSeconds, 1)
-		AssertTrue(type(scheduledCallback) == "function")
-		AssertEquals(scheduledRefreshDelay, nil)
-		scheduledCallback()
-		AssertEquals(scheduledRefreshDelay, 0)
 	end)
+
+	AssertEquals(scheduledReason, "ZONE_CHANGED_NEW_AREA")
+	AssertEquals(scheduledDelay, 0)
 end)
 
 QuestTogether:RegisterTest("Plater startup full refresh refreshes visible nameplates directly", function()
@@ -5259,7 +5168,7 @@ QuestTogether:RegisterTest("unit quest log changed schedules delayed nameplate r
 	local scheduledReason = nil
 	local scheduledDelay = nil
 
-	WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
+	WithPatchedMethod(QuestTogether, "ScheduleQuestStateRefreshWork", function(_, reason, delaySeconds)
 		scheduledReason = reason
 		scheduledDelay = delaySeconds
 	end, function()
@@ -5274,7 +5183,7 @@ QuestTogether:RegisterTest("quest query complete schedules delayed nameplate ref
 	local scheduledReason = nil
 	local scheduledDelay = nil
 
-	WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
+	WithPatchedMethod(QuestTogether, "ScheduleQuestStateRefreshWork", function(_, reason, delaySeconds)
 		scheduledReason = reason
 		scheduledDelay = delaySeconds
 	end, function()
@@ -5355,11 +5264,9 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh can preserve cached
 	AssertEquals(QuestTogether.nameplateQuestStateByUnitToken["nameplate9"], true)
 end)
 
-QuestTogether:RegisterTest("scheduled nameplate tint refresh defers while world map widgets are active", function()
+QuestTogether:RegisterTest("scheduled nameplate tint refresh queues resolver when cached state is unavailable", function()
 	local appliedUnitFrame = nil
-	local liveObjectiveChecks = 0
-	local scheduledReason = nil
-	local scheduledDelay = nil
+	local scheduledUnitToken = nil
 	local healthBar = {}
 	local unitFrame = {
 		unit = "nameplate9",
@@ -5388,9 +5295,6 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh defers while world 
 			AssertEquals(unitToken, "nameplate9")
 			return namePlateFrameBase
 		end,
-		IsWorldMapVisible = function()
-			return true
-		end,
 	})
 
 		WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
@@ -5400,22 +5304,20 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh defers while world 
 				AssertEquals(unitToken, "nameplate9")
 				return "Creature-0-0-0-0-11111-0000000000"
 			end, function()
-				WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
-					liveObjectiveChecks = liveObjectiveChecks + 1
-					return true, false, "Creature-0-0-0-0-11111-0000000000"
+				WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function()
+					return false, false, "Creature-0-0-0-0-11111-0000000000"
 				end, function()
 					WithPatchedMethod(QuestTogether, "ShouldApplyQuestHealthTint", function(_, candidateFrame, isQuestObjective)
 						AssertEquals(candidateFrame, unitFrame)
-						AssertEquals(isQuestObjective, true)
-						return true
+						AssertEquals(isQuestObjective, nil)
+						return false
 					end, function()
 						WithPatchedMethod(QuestTogether, "ApplyQuestTintToNameplate", function(_, candidateFrame)
 							appliedUnitFrame = candidateFrame
 							return true
 						end, function()
-							WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
-								scheduledReason = reason
-								scheduledDelay = delaySeconds
+							WithPatchedMethod(QuestTogether, "ScheduleNameplateTooltipResolution", function(_, unitToken)
+								scheduledUnitToken = unitToken
 							end, function()
 								QuestTogether:ScheduleNameplateHealthTintRefresh("nameplate9", 0, true)
 							end)
@@ -5424,10 +5326,8 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh defers while world 
 				end)
 			end)
 		end)
-	AssertEquals(liveObjectiveChecks, 0)
 	AssertEquals(appliedUnitFrame, nil)
-	AssertEquals(scheduledReason, "NameplateHealthTintRefreshWorldMapVisible")
-	AssertEquals(scheduledDelay, 0.2)
+	AssertEquals(scheduledUnitToken, "nameplate9")
 end)
 
 QuestTogether:RegisterTest("scheduled nameplate tint refresh ignores cached quest state when unit guid changes", function()

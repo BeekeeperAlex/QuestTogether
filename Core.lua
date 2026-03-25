@@ -465,6 +465,8 @@ QuestTogether.runtimeEvents = {
 	"ZONE_CHANGED_NEW_AREA",
 	"PLAYER_REGEN_ENABLED",
 	"PLAYER_ENTERING_WORLD",
+	"ADDON_RESTRICTION_STATE_CHANGED",
+	"SUPER_TRACKING_CHANGED",
 	"GROUP_JOINED",
 	"GROUP_ROSTER_UPDATE",
 }
@@ -3251,28 +3253,51 @@ function QuestTogether:CreateBlizzardWaypoint(mapID, coordX, coordY)
 	if not numericMapID or not numericX or not numericY then
 		return false
 	end
-	if self.API and self.API.InCombatLockdown and self.API.InCombatLockdown() then
-		return false
+
+	local function applyWaypoint()
+		if not (self.API and self.API.CanSetUserWaypointOnMap and self.API.CanSetUserWaypointOnMap(numericMapID)) then
+			return false
+		end
+
+		local point = self.API.CreateUiMapPoint and self.API.CreateUiMapPoint(numericMapID, numericX / 100, numericY / 100)
+		if not point then
+			return false
+		end
+
+		if self.API.SetUserWaypoint then
+			self.API.SetUserWaypoint(point)
+		end
+		if self.API.SetSuperTrackedUserWaypoint then
+			pcall(self.API.SetSuperTrackedUserWaypoint, true)
+		end
+		return true
 	end
 
-	if not (self.API and self.API.CanSetUserWaypointOnMap and self.API.CanSetUserWaypointOnMap(numericMapID)) then
-		return false
+	if self.RunOrDeferWork then
+		self:SetPendingWaypointIntent({
+			mapID = numericMapID,
+			coordX = numericX,
+			coordY = numericY,
+		})
+		local ranNow = self:RunOrDeferWork("waypoint_mutation", "user_waypoint", function()
+			local pending = self.GetRuntimeWorkStateStore
+				and self:GetRuntimeWorkStateStore().pendingWaypointIntent
+				or self.pendingWaypointIntent
+			if self.SetPendingWaypointIntent then
+				self:SetPendingWaypointIntent(nil)
+			else
+				self.pendingWaypointIntent = nil
+			end
+			if pending then
+				applyWaypoint()
+			end
+		end, 0.2, "CreateBlizzardWaypoint")
+		if not ranNow then
+			return true
+		end
 	end
 
-	local point = self.API.CreateUiMapPoint and self.API.CreateUiMapPoint(numericMapID, numericX / 100, numericY / 100)
-	if not point then
-		return false
-	end
-
-	if self.API.SetUserWaypoint then
-		self.API.SetUserWaypoint(point)
-	end
-	-- Super-tracking can trigger protected world-map pin refreshes while state changes are still
-	-- settling, so this remains best-effort and non-fatal.
-	if self.API.SetSuperTrackedUserWaypoint then
-		pcall(self.API.SetSuperTrackedUserWaypoint, true)
-	end
-	return true
+	return applyWaypoint()
 end
 
 function QuestTogether:OpenPingWaypoint(mapID, coordX, coordY)
@@ -3911,10 +3936,10 @@ end
 function QuestTogether:QueueQuestLogTask(taskFn)
 	if type(taskFn) == "function" then
 		table.insert(self.onQuestLogUpdate, taskFn)
-		if self.API and self.API.InCombatLockdown and self.API.InCombatLockdown() then
-			self.pendingQuestLogTaskDrain = true
-		end
 		self:Debugf("quest", "Queued quest log task count=%d", #self.onQuestLogUpdate)
+		if self.ScheduleQuestLogTaskDrain then
+			self:ScheduleQuestLogTaskDrain("QueueQuestLogTask")
+		end
 	end
 end
 
@@ -4028,8 +4053,15 @@ function QuestTogether:Enable()
 	self.API.RegisterAddonPrefix(self.commPrefix)
 	self:Debugf("comms", "Registered addon prefix=%s", tostring(self.commPrefix))
 	self.isEnabled = true
-	self.worldQuestAreaStateByQuestID = {}
-	self.bonusObjectiveAreaStateByQuestID = {}
+	if self.ResetTaskAreaStateStore then
+		self:ResetTaskAreaStateStore()
+	end
+	if self.ResetRuntimeWorkStateStore then
+		self:ResetRuntimeWorkStateStore()
+	end
+	if self.SyncLegacyRuntimeStateAliases then
+		self:SyncLegacyRuntimeStateAliases()
+	end
 	if self.EnsureAnnouncementChannelJoined then
 		self:EnsureAnnouncementChannelJoined()
 	end
@@ -4075,8 +4107,15 @@ function QuestTogether:Disable()
 
 	self:UnregisterRuntimeEvents()
 	self.isEnabled = false
-	self.worldQuestAreaStateByQuestID = {}
-	self.bonusObjectiveAreaStateByQuestID = {}
+	if self.ResetTaskAreaStateStore then
+		self:ResetTaskAreaStateStore()
+	end
+	if self.ResetRuntimeWorkStateStore then
+		self:ResetRuntimeWorkStateStore()
+	end
+	if self.SyncLegacyRuntimeStateAliases then
+		self:SyncLegacyRuntimeStateAliases()
+	end
 	if self.LeaveAnnouncementChannel then
 		self:LeaveAnnouncementChannel()
 	end
@@ -4647,6 +4686,12 @@ end
 
 function QuestTogether:OnInitialize()
 	self:InitializeDatabase()
+	if self.EnsureRuntimeStateStore then
+		self:EnsureRuntimeStateStore()
+	end
+	if self.SyncLegacyRuntimeStateAliases then
+		self:SyncLegacyRuntimeStateAliases()
+	end
 	if self.InitializePartyState then
 		self:InitializePartyState()
 	end
