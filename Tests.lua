@@ -1815,6 +1815,62 @@ QuestTogether:RegisterTest("quest turn in followed by removal announces completi
 	end)
 end)
 
+QuestTogether:RegisterTest("world quest turn in preserves world quest completion icon", function()
+	local delayed = {}
+	local completed = nil
+
+	QuestTogether.API = CreateApiWithOverrides({
+		Delay = function(_, callback)
+			delayed[#delayed + 1] = callback
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "GetPlayerName", function()
+		return "Tester"
+	end, function()
+		local tracker = QuestTogether:GetPlayerTracker()
+		tracker[54321] = {
+			title = "Test World Quest",
+			iconAsset = "worldquest-icon",
+			iconKind = "atlas",
+		}
+
+		WithPatchedMethod(QuestTogether, "GetTaskAnnouncementType", function(_, questId)
+			AssertEquals(questId, 54321)
+			return "world"
+		end, function()
+			WithPatchedMethod(QuestTogether, "HandleQuestCompleted", function(_, questTitle, questId, extraData)
+				completed = {
+					questTitle = questTitle,
+					questId = questId,
+					extraData = extraData,
+				}
+			end, function()
+				WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function() end, function()
+					WithPatchedMethod(QuestTogether, "RefreshTaskAreaStates", function() end, function()
+						WithPatchedMethod(QuestTogether, "GetAnnouncementIconInfo", function(_, eventType, questId)
+							AssertEquals(eventType, "WORLD_QUEST_COMPLETED")
+							AssertEquals(questId, 54321)
+							return "worldquest-icon", "atlas"
+						end, function()
+							QuestTogether:QUEST_TURNED_IN(nil, 54321)
+							QuestTogether:QUEST_REMOVED(nil, 54321)
+							AssertEquals(#delayed, 1)
+							delayed[1]()
+						end)
+					end)
+				end)
+			end)
+		end)
+
+		AssertTrue(completed ~= nil)
+		AssertEquals(completed.questTitle, "Test World Quest")
+		AssertEquals(completed.questId, 54321)
+		AssertEquals(completed.extraData.iconAsset, "worldquest-icon")
+		AssertEquals(completed.extraData.iconKind, "atlas")
+	end)
+end)
+
 QuestTogether:RegisterTest("quest removal before turn in still resolves as completion", function()
 	local delayed = {}
 	local completed = nil

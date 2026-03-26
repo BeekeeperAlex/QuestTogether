@@ -236,7 +236,14 @@ function QuestTogether:BuildTrackedQuestCompletionData(questId)
 		taskAnnouncementType = self:GetTaskAnnouncementType(questId),
 	}
 
-	local iconAsset, iconKind = self:GetAnnouncementIconInfo("QUEST_READY_TO_TURN_IN", questId)
+	local completionEventType = "QUEST_READY_TO_TURN_IN"
+	if completionData.taskAnnouncementType == "world" then
+		completionEventType = "WORLD_QUEST_COMPLETED"
+	elseif completionData.taskAnnouncementType == "bonus" then
+		completionEventType = "BONUS_OBJECTIVE_COMPLETED"
+	end
+
+	local iconAsset, iconKind = self:GetAnnouncementIconInfo(completionEventType, questId)
 	if type(iconAsset) == "string" and iconAsset ~= "" then
 		completionData.iconAsset = iconAsset
 		completionData.iconKind = iconKind
