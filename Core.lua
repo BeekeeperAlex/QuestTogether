@@ -103,6 +103,33 @@ local function BuildSanitizedQuestLogInfoFromRawInfo(questLogIndex, rawInfo)
 	)
 end
 
+local function MergeSanitizedQuestLogInfo(primaryInfo, fallbackInfo)
+	if type(primaryInfo) ~= "table" then
+		return type(fallbackInfo) == "table" and fallbackInfo or nil
+	end
+	if type(fallbackInfo) ~= "table" then
+		return primaryInfo
+	end
+
+	local mergedInfo = {}
+	mergedInfo.questLogIndex = primaryInfo.questLogIndex or fallbackInfo.questLogIndex
+	mergedInfo.title = primaryInfo.title or fallbackInfo.title
+	mergedInfo.questID = primaryInfo.questID or fallbackInfo.questID
+	mergedInfo.isHeader = primaryInfo.isHeader == true or fallbackInfo.isHeader == true
+	mergedInfo.isHidden = primaryInfo.isHidden == true or fallbackInfo.isHidden == true
+	mergedInfo.isTask = primaryInfo.isTask == true or fallbackInfo.isTask == true
+	mergedInfo.isOnMap = primaryInfo.isOnMap == true or fallbackInfo.isOnMap == true
+	mergedInfo.hasLocalPOI = primaryInfo.hasLocalPOI == true or fallbackInfo.hasLocalPOI == true
+	mergedInfo.isComplete = primaryInfo.isComplete == true or fallbackInfo.isComplete == true
+	if primaryInfo.isWorldQuest ~= nil then
+		mergedInfo.isWorldQuest = primaryInfo.isWorldQuest == true
+	elseif fallbackInfo.isWorldQuest ~= nil then
+		mergedInfo.isWorldQuest = fallbackInfo.isWorldQuest == true
+	end
+
+	return mergedInfo
+end
+
 local function GetSnapshotBuilderQuestLogInfo(questLogIndex)
 	local numericQuestLogIndex = QuestTogether and QuestTogether.SafeToNumber
 		and QuestTogether:SafeToNumber(questLogIndex)
@@ -944,6 +971,31 @@ QuestTogether.API = QuestTogether.API or {
 			end
 			return false
 		end,
+		IsWorldQuest = function(questID)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID then
+				return nil
+			end
+			if C_QuestLog and C_QuestLog.IsWorldQuest then
+				local ok, isWorldQuest = pcall(C_QuestLog.IsWorldQuest, numericQuestID)
+				if not ok then
+					return nil
+				end
+				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(isWorldQuest) then
+					return nil
+				end
+				if type(isWorldQuest) == "boolean" then
+					return isWorldQuest
+				end
+				local numericFlag = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(isWorldQuest)
+					or nil
+				if numericFlag ~= nil then
+					return numericFlag ~= 0
+				end
+			end
+			return nil
+		end,
 		IsTaskQuestActive = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
 				or nil
@@ -1349,16 +1401,6 @@ QuestTogether.API = QuestTogether.API or {
 				return nil
 			end
 
-			if C_QuestLog and C_QuestLog.GetInfo then
-				local okInfo, rawInfo = pcall(C_QuestLog.GetInfo, numericQuestLogIndex)
-				if okInfo then
-					local sanitizedInfo = BuildSanitizedQuestLogInfoFromRawInfo(numericQuestLogIndex, rawInfo)
-					if sanitizedInfo then
-						return sanitizedInfo
-					end
-				end
-			end
-
 			local titleInfo = nil
 			if type(GetQuestLogTitle) == "function" then
 				local okTitle, title, _, _, isHeader, _, isComplete, _, questID, _, displayQuestID, isOnMap, hasLocalPOI, isTask, _ =
@@ -1379,6 +1421,17 @@ QuestTogether.API = QuestTogether.API or {
 					)
 				end
 			end
+
+			if C_QuestLog and C_QuestLog.GetInfo then
+				local okInfo, rawInfo = pcall(C_QuestLog.GetInfo, numericQuestLogIndex)
+				if okInfo then
+					local sanitizedInfo = BuildSanitizedQuestLogInfoFromRawInfo(numericQuestLogIndex, rawInfo)
+					if sanitizedInfo then
+						return MergeSanitizedQuestLogInfo(sanitizedInfo, titleInfo)
+					end
+				end
+			end
+
 			return titleInfo
 		end,
 		GetNumQuestLeaderBoards = function(questLogIndex)
@@ -2805,6 +2858,9 @@ function QuestTogether:RebuildQuestSnapshotStore()
 			local numericQuestID = self:NormalizeQuestID(questInfo.questID)
 			if numericQuestID then
 				local isWorldQuest = questInfo.isWorldQuest == true
+				if not isWorldQuest and self.API and self.API.IsWorldQuest then
+					isWorldQuest = self.API.IsWorldQuest(numericQuestID) == true
+				end
 				local isTaskQuest = questInfo.isTask == true or isWorldQuest == true
 				local taskQuestInfo = nil
 				if isTaskQuest and not isWorldQuest and self.API and self.API.GetTaskQuestInfoByQuestID then
@@ -3851,6 +3907,13 @@ function QuestTogether:IsWorldQuest(questId)
 	local numericQuestId = self:NormalizeQuestID(questId)
 	if not numericQuestId then
 		return false
+	end
+
+	if self.API and self.API.IsWorldQuest then
+		local apiResult = self.API.IsWorldQuest(numericQuestId)
+		if apiResult ~= nil then
+			return apiResult == true
+		end
 	end
 
 	if self.EnsureQuestSnapshotStore then

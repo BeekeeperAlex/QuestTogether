@@ -54,26 +54,97 @@ local function SortedQuestIdKeys(tableValue)
 	return keys
 end
 
+local function BuildTaskAreaStateSummary(stateByQuestId)
+	local parts = {}
+	local keys = SortedQuestIdKeys(stateByQuestId)
+	local maxParts = math.min(#keys, 5)
+	for index = 1, maxParts do
+		local questId = keys[index]
+		local questTitle = stateByQuestId and stateByQuestId[questId] or nil
+		parts[#parts + 1] = tostring(questId) .. ":" .. SafeText(questTitle, "Unknown")
+	end
+	if #keys > maxParts then
+		parts[#parts + 1] = string.format("...(%d more)", #keys - maxParts)
+	end
+	return table.concat(parts, " | ")
+end
+
+local function BuildMergedTaskAreaQuestInfo(addon, questId, liveQuestInfo, snapshotInfo)
+	local mergedQuestInfo = {}
+	local liveInfo = type(liveQuestInfo) == "table" and liveQuestInfo or nil
+	local snapshot = type(snapshotInfo) == "table" and snapshotInfo or nil
+
+	mergedQuestInfo.questID = liveInfo and liveInfo.questID or (snapshot and snapshot.questID) or questId
+	mergedQuestInfo.title = liveInfo and liveInfo.title or (snapshot and snapshot.title) or nil
+	mergedQuestInfo.questLogIndex = liveInfo and liveInfo.questLogIndex or (snapshot and snapshot.questLogIndex) or nil
+	mergedQuestInfo.isHeader = liveInfo and liveInfo.isHeader == true or false
+	mergedQuestInfo.isTask = liveInfo and liveInfo.isTask == true or (snapshot and snapshot.isTask == true) or false
+	mergedQuestInfo.isOnMap = liveInfo and liveInfo.isOnMap == true or false
+	mergedQuestInfo.hasLocalPOI = liveInfo and liveInfo.hasLocalPOI == true or false
+	mergedQuestInfo.isComplete = liveInfo and liveInfo.isComplete == true or (snapshot and snapshot.isComplete == true) or false
+	mergedQuestInfo.isWorldQuest = liveInfo and liveInfo.isWorldQuest == true or (snapshot and snapshot.isWorldQuest == true) or false
+	mergedQuestInfo.displayAsObjective = snapshot and snapshot.displayAsObjective == true or false
+	mergedQuestInfo.isBonusObjective = snapshot and snapshot.isBonusObjective == true or false
+	mergedQuestInfo.taskAnnouncementType = snapshot and snapshot.taskAnnouncementType or nil
+
+	local shouldTreatHiddenAsRelevant = mergedQuestInfo.isTask == true
+		or mergedQuestInfo.isWorldQuest == true
+		or mergedQuestInfo.displayAsObjective == true
+		or mergedQuestInfo.isBonusObjective == true
+		or mergedQuestInfo.taskAnnouncementType == "world"
+		or mergedQuestInfo.taskAnnouncementType == "bonus"
+
+	if liveInfo and liveInfo.isHidden == true and not shouldTreatHiddenAsRelevant then
+		mergedQuestInfo.isHidden = true
+	else
+		mergedQuestInfo.isHidden = false
+	end
+
+	if mergedQuestInfo.isWorldQuest ~= true and addon and addon.API and addon.API.IsWorldQuest then
+		mergedQuestInfo.isWorldQuest = addon.API.IsWorldQuest(questId) == true
+	end
+
+	if
+		mergedQuestInfo.isWorldQuest ~= true
+		and mergedQuestInfo.displayAsObjective ~= true
+		and mergedQuestInfo.isBonusObjective ~= true
+		and addon
+		and addon.API
+		and addon.API.GetTaskQuestInfoByQuestID
+	then
+		local taskQuestInfo = addon.API.GetTaskQuestInfoByQuestID(questId)
+		if type(taskQuestInfo) == "table" and taskQuestInfo.displayAsObjective == true then
+			mergedQuestInfo.displayAsObjective = true
+			mergedQuestInfo.isBonusObjective = true
+		end
+	end
+
+	return mergedQuestInfo
+end
+
 local function BuildQuestLogQuestInfoIndex(addon)
 	local questInfoByQuestId = {}
 
-	if not addon then
+	if not (addon and addon.API and addon.API.GetNumQuestLogEntries and addon.API.GetQuestLogInfo) then
 		return questInfoByQuestId
 	end
 
 	if addon.EnsureQuestSnapshotStore then
 		addon:EnsureQuestSnapshotStore()
 	end
-
 	local snapshotByQuestID = addon.GetQuestSnapshotByQuestID and addon:GetQuestSnapshotByQuestID() or nil
-	local snapshotOrder = addon.GetQuestSnapshotOrder and addon:GetQuestSnapshotOrder() or nil
-	for index = 1, #(snapshotOrder or {}) do
-		local questID = snapshotOrder[index]
-		local questInfo = snapshotByQuestID and snapshotByQuestID[questID] or nil
-		if questInfo and questInfo.isHidden ~= true then
-			local normalizedQuestId = NormalizeQuestId(addon, questInfo.questID or questID)
+
+	local totalEntries = addon:SafeToNumber(addon.API.GetNumQuestLogEntries()) or 0
+	for entryIndex = 1, totalEntries do
+		local liveQuestInfo = addon.API.GetQuestLogInfo(entryIndex)
+		if type(liveQuestInfo) == "table" then
+			local normalizedQuestId = NormalizeQuestId(addon, liveQuestInfo.questID)
 			if normalizedQuestId and not questInfoByQuestId[normalizedQuestId] then
-				questInfoByQuestId[normalizedQuestId] = questInfo
+				local snapshotInfo = snapshotByQuestID and snapshotByQuestID[normalizedQuestId] or nil
+				local mergedQuestInfo = BuildMergedTaskAreaQuestInfo(addon, normalizedQuestId, liveQuestInfo, snapshotInfo)
+				if mergedQuestInfo.isHeader ~= true and mergedQuestInfo.isHidden ~= true then
+					questInfoByQuestId[normalizedQuestId] = mergedQuestInfo
+				end
 			end
 		end
 	end
@@ -117,11 +188,13 @@ local function BuildActiveTaskAreaSnapshot(taskAreaState, taskType)
 end
 
 local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId, isBonusObjective)
-	local mapFlags = questInfo and (questInfo.isOnMap == true or questInfo.hasLocalPOI == true) and true or false
+	local isOnMap = questInfo and questInfo.isOnMap == true or false
+	local hasLocalPOI = questInfo and questInfo.hasLocalPOI == true or false
+	local mapFlags = (isOnMap or hasLocalPOI) and true or false
 
 	local areaActive = false
 	if taskType == "world" then
-		areaActive = mapFlags
+		areaActive = isOnMap
 	elseif mapFlags and isBonusObjective == true then
 		areaActive = true
 	end
@@ -165,6 +238,21 @@ local function BuildTaskAreaResolution(addon, normalizedQuestId, questInfo)
 	local includeWorld = isTask and worldSignals.areaActive == true and isWorldQuest == true
 	local includeBonus = isTask and bonusSignals.areaActive == true and isWorldQuest ~= true
 
+	if taskAnnouncementType == "world" and addon and addon.Debugf then
+		addon:Debugf(
+			"DEBUG",
+			"world_area_resolve questId=%s title=%s task=%s onMap=%s poi=%s explicitWorld=%s fallbackWorld=%s includeWorld=%s",
+			tostring(normalizedQuestId),
+			SafeText(title, "Unknown"),
+			tostring(explicitTask),
+			tostring(questInfo and questInfo.isOnMap == true or false),
+			tostring(questInfo and questInfo.hasLocalPOI == true or false),
+			tostring(explicitWorld),
+			tostring(fallbackWorld),
+			tostring(includeWorld)
+		)
+	end
+
 	return {
 		questID = normalizedQuestId,
 		title = title,
@@ -197,6 +285,13 @@ function QuestTogether:RebuildTaskAreaResolverStore()
 
 	local questInfoByQuestId = BuildQuestLogQuestInfoIndex(self)
 	local candidateQuestIds = BuildTaskAreaCandidateQuestIds(self, questInfoByQuestId)
+
+	self:Debugf(
+		"DEBUG",
+		"task_area_scan rows=%d candidates=%d",
+		CountKeys(questInfoByQuestId),
+		CountKeys(candidateQuestIds)
+	)
 
 	for _, normalizedQuestId in ipairs(SortedQuestIdKeys(candidateQuestIds)) do
 		local questInfo = questInfoByQuestId[normalizedQuestId]
@@ -280,6 +375,17 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 		end
 	end
 
+	if taskType == "world" then
+		self:Debugf(
+			"DEBUG",
+			"world_area_state announce=%s prev=%d curr=%d current=%s",
+			tostring(shouldAnnounce and true or false),
+			CountKeys(previousState),
+			CountKeys(currentState),
+			BuildTaskAreaStateSummary(currentState)
+		)
+	end
+
 	if taskAreaState and self.GetTaskAreaStateStore then
 		local stateStore = self:GetTaskAreaStateStore(taskType)
 		wipe(stateStore)
@@ -290,6 +396,14 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 
 	for questId, questTitle in pairs(currentState) do
 		if not previousState[questId] and shouldAnnounce then
+			if taskType == "world" then
+				self:Debugf(
+					"DEBUG",
+					"world_area_enter questId=%s title=%s",
+					tostring(questId),
+					SafeText(questTitle, "Unknown")
+				)
+			end
 			self:PublishAnnouncementEvent(config.enterEvent, config.enterPrefix .. SafeText(questTitle, "Unknown"), questId)
 		end
 	end
@@ -299,6 +413,14 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 				local wasCompleted = self.questsCompleted[questId] ~= nil
 				if shouldAnnounce and not wasCompleted then
 					local questTitle = previousTitle or self:GetQuestTitle(questId)
+					if taskType == "world" then
+						self:Debugf(
+							"DEBUG",
+							"world_area_left questId=%s title=%s",
+							tostring(questId),
+							SafeText(questTitle, "Unknown")
+						)
+					end
 					self:PublishAnnouncementEvent(config.leftEvent, config.leftPrefix .. SafeText(questTitle, "Unknown"), questId)
 				end
 			end

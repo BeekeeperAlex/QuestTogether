@@ -252,10 +252,6 @@ function QuestTogether:ClearTrackedQuestState(questId)
 	end
 
 	local tracker = self:GetPlayerTracker()
-	local worldState = self:GetTaskAreaStateStore("world")
-	local bonusState = self:GetTaskAreaStateStore("bonus")
-	worldState[questId] = nil
-	bonusState[questId] = nil
 	tracker[questId] = nil
 	self.pendingQuestRemovals[questId] = nil
 	self.questsCompleted[questId] = nil

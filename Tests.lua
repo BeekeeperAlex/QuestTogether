@@ -61,6 +61,9 @@ local function CreateApiWithOverrides(overrides)
 		IsTaskQuestActive = function()
 			return nil
 		end,
+		IsWorldQuest = function()
+			return nil
+		end,
 		GetTaskQuestInfoByQuestID = function()
 			return nil
 		end,
@@ -784,18 +787,17 @@ QuestTogether:RegisterTest("task area snapshot falls back to IsWorldQuest when q
 		IsTaskQuestActive = function()
 			error("IsTaskQuestActive should not be called")
 		end,
+		IsWorldQuest = function(questId)
+			AssertEquals(questId, 12345)
+			return true
+		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "IsWorldQuest", function(_, questId)
-		AssertEquals(questId, 12345)
-		return true
-	end, function()
-		QuestTogether:RefreshTaskAreaStates(false)
-		local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
-		local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
-		AssertEquals(worldSnapshot[12345], "Fallback Classified World Quest")
-		AssertEquals(bonusSnapshot[12345], nil)
-	end)
+	QuestTogether:RefreshTaskAreaStates(false)
+	local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
+	local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
+	AssertEquals(worldSnapshot[12345], "Fallback Classified World Quest")
+	AssertEquals(bonusSnapshot[12345], nil)
 end)
 
 QuestTogether:RegisterTest("task area snapshot ignores live task helper APIs and out-of-area world quests", function()
@@ -869,6 +871,54 @@ QuestTogether:RegisterTest("task area snapshot includes world quests from snapsh
 	AssertEquals(worldSnapshot[22230], "Snapshot In Area World Quest")
 end)
 
+QuestTogether:RegisterTest("task area snapshot prefers live quest log rows over cached snapshot state", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 1
+		end,
+		GetQuestLogInfo = function(questLogIndex)
+			AssertEquals(questLogIndex, 1)
+			return {
+				questID = 22231,
+				title = "Live In Area World Quest",
+				isHeader = false,
+				isHidden = false,
+				isTask = true,
+				isOnMap = true,
+				hasLocalPOI = false,
+				isWorldQuest = false,
+			}
+		end,
+		IsWorldQuest = function(questId)
+			AssertEquals(questId, 22231)
+			return true
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+	if QuestTogether.ResetQuestSnapshotStore then
+		QuestTogether:ResetQuestSnapshotStore()
+	end
+
+	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	snapshotState.byQuestID[22231] = {
+		questID = 22231,
+		title = "Stale Out Of Area World Quest",
+		isHidden = false,
+		isTask = true,
+		isOnMap = false,
+		hasLocalPOI = false,
+		isWorldQuest = true,
+	}
+	snapshotState.order[1] = 22231
+
+	QuestTogether:RefreshTaskAreaStates(false)
+	local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
+	AssertEquals(worldSnapshot[22231], "Live In Area World Quest")
+end)
+
 QuestTogether:RegisterTest("task area snapshot treats world quests as tasks when task flag is falsey", function()
 	QuestTogether.API = CreateApiWithOverrides({
 		GetNumQuestLogEntries = function()
@@ -896,16 +946,15 @@ QuestTogether:RegisterTest("task area snapshot treats world quests as tasks when
 		IsTaskQuestActive = function()
 			error("IsTaskQuestActive should not be called")
 		end,
+		IsWorldQuest = function(questId)
+			AssertEquals(questId, 33333)
+			return true
+		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "IsWorldQuest", function(_, questId)
-		AssertEquals(questId, 33333)
-		return true
-	end, function()
-		QuestTogether:RefreshTaskAreaStates(false)
-		local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
-		AssertEquals(worldSnapshot[33333], "World Quest Without Task Flag")
-	end)
+	QuestTogether:RefreshTaskAreaStates(false)
+	local worldSnapshot = QuestTogether:GetTaskAreaSnapshot("world")
+	AssertEquals(worldSnapshot[33333], "World Quest Without Task Flag")
 end)
 
 QuestTogether:RegisterTest("task area snapshot derives bonus objectives from displayAsObjective plus snapshot map flags", function()
@@ -1151,21 +1200,33 @@ QuestTogether:RegisterTest("task area snapshot avoids map task API reads that ta
 		GetQuestPOIsOnMap = function()
 			error("GetQuestPOIsOnMap should not be called")
 		end,
+		GetTaskQuestInfoByQuestID = function(questId)
+			AssertEquals(questId, 33335)
+			return {
+				displayAsObjective = true,
+			}
+		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "IsWorldQuest", function(_, questId)
-		AssertEquals(questId, 33335)
-		return false
-	end, function()
-		WithPatchedMethod(QuestTogether, "IsBonusObjective", function(_, questId)
-			AssertEquals(questId, 33335)
+	QuestTogether:RefreshTaskAreaStates(false)
+	local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
+	AssertEquals(bonusSnapshot[33335], "Bonus Objective Without Map Arrays")
+end)
+
+QuestTogether:RegisterTest("task announcement type falls back to IsWorldQuest API when snapshots are falsey", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		IsWorldQuest = function(questId)
+			AssertEquals(questId, 44444)
 			return true
-		end, function()
-			QuestTogether:RefreshTaskAreaStates(false)
-			local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
-			AssertEquals(bonusSnapshot[33335], "Bonus Objective Without Map Arrays")
-		end)
-	end)
+		end,
+	})
+
+	QuestTogether:ResetTaskAreaStateStore()
+	if QuestTogether.ResetQuestSnapshotStore then
+		QuestTogether:ResetQuestSnapshotStore()
+	end
+
+	AssertEquals(QuestTogether:GetTaskAnnouncementType(44444), "world")
 end)
 
 QuestTogether:RegisterTest("world quest area refresh publishes enter and leave events from snapshot diffs", function()
@@ -1206,6 +1267,234 @@ QuestTogether:RegisterTest("world quest area refresh publishes enter and leave e
 AssertEquals(events[2].eventType, "WORLD_QUEST_LEFT")
 AssertEquals(events[2].questId, 12345)
 AssertTrue(string.find(events[2].text, "Snapshot World Quest", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("task area refresh reacts to live world area changes across repeated refreshes", function()
+	local events = {}
+	local liveQuestInfo = {
+		questID = 55555,
+		title = "Fresh World Quest Area State",
+		isHeader = false,
+		isHidden = false,
+		isTask = true,
+		isOnMap = false,
+		hasLocalPOI = false,
+		isWorldQuest = false,
+	}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 1
+		end,
+		GetQuestLogInfo = function(questLogIndex)
+			AssertEquals(questLogIndex, 1)
+			return liveQuestInfo
+		end,
+		IsWorldQuest = function(questId)
+			AssertEquals(questId, 55555)
+			return true
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+	if QuestTogether.ResetQuestSnapshotStore then
+		QuestTogether:ResetQuestSnapshotStore()
+	end
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		QuestTogether:RefreshTaskAreaStates(false)
+
+		liveQuestInfo = {
+			questID = 55555,
+			title = "Fresh World Quest Area State",
+			isHeader = false,
+			isHidden = false,
+			isTask = true,
+			isOnMap = true,
+			hasLocalPOI = false,
+			isWorldQuest = false,
+		}
+		QuestTogether:RefreshTaskAreaStates(true)
+
+		liveQuestInfo = {
+			questID = 55555,
+			title = "Fresh World Quest Area State",
+			isHeader = false,
+			isHidden = false,
+			isTask = true,
+			isOnMap = false,
+			hasLocalPOI = false,
+			isWorldQuest = false,
+		}
+		QuestTogether:RefreshTaskAreaStates(true)
+	end)
+
+	AssertEquals(events[1].eventType, "WORLD_QUEST_ENTERED")
+	AssertEquals(events[1].questId, 55555)
+	AssertTrue(string.find(events[1].text, "Fresh World Quest Area State", 1, true) ~= nil)
+	AssertEquals(events[2].eventType, "WORLD_QUEST_LEFT")
+	AssertEquals(events[2].questId, 55555)
+	AssertTrue(string.find(events[2].text, "Fresh World Quest Area State", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("clearing tracked world quest state preserves prior area snapshot for left announcement diff", function()
+	local events = {}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 0
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+
+	local worldState = QuestTogether:GetTaskAreaStateStore("world")
+	worldState[66666] = "Tracked World Quest"
+	QuestTogether:GetPlayerTracker()[66666] = {
+		title = "Tracked World Quest",
+		taskAnnouncementType = "world",
+	}
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		QuestTogether:ClearTrackedQuestState(66666)
+	end)
+
+	AssertEquals(events[1].eventType, "WORLD_QUEST_LEFT")
+	AssertEquals(events[1].questId, 66666)
+	AssertTrue(string.find(events[1].text, "Tracked World Quest", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("task area refresh reacts to live bonus area changes across repeated refreshes", function()
+	local events = {}
+	local liveQuestInfo = {
+		questID = 77770,
+		title = "Fresh Bonus Objective Area State",
+		isHeader = false,
+		isHidden = false,
+		isTask = true,
+		isOnMap = false,
+		hasLocalPOI = false,
+		isWorldQuest = false,
+	}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 1
+		end,
+		GetQuestLogInfo = function(questLogIndex)
+			AssertEquals(questLogIndex, 1)
+			return liveQuestInfo
+		end,
+		GetTaskQuestInfoByQuestID = function(questId)
+			AssertEquals(questId, 77770)
+			return {
+				displayAsObjective = true,
+			}
+		end,
+		IsWorldQuest = function(questId)
+			AssertEquals(questId, 77770)
+			return false
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+	if QuestTogether.ResetQuestSnapshotStore then
+		QuestTogether:ResetQuestSnapshotStore()
+	end
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		QuestTogether:RefreshTaskAreaStates(false)
+
+		liveQuestInfo = {
+			questID = 77770,
+			title = "Fresh Bonus Objective Area State",
+			isHeader = false,
+			isHidden = false,
+			isTask = true,
+			isOnMap = false,
+			hasLocalPOI = true,
+			isWorldQuest = false,
+		}
+		QuestTogether:RefreshTaskAreaStates(true)
+
+		liveQuestInfo = {
+			questID = 77770,
+			title = "Fresh Bonus Objective Area State",
+			isHeader = false,
+			isHidden = false,
+			isTask = true,
+			isOnMap = false,
+			hasLocalPOI = false,
+			isWorldQuest = false,
+		}
+		QuestTogether:RefreshTaskAreaStates(true)
+	end)
+
+	AssertEquals(events[1].eventType, "BONUS_OBJECTIVE_ENTERED")
+	AssertEquals(events[1].questId, 77770)
+	AssertTrue(string.find(events[1].text, "Fresh Bonus Objective Area State", 1, true) ~= nil)
+	AssertEquals(events[2].eventType, "BONUS_OBJECTIVE_LEFT")
+	AssertEquals(events[2].questId, 77770)
+	AssertTrue(string.find(events[2].text, "Fresh Bonus Objective Area State", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("clearing tracked bonus objective state preserves prior area snapshot for left announcement diff", function()
+	local events = {}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 0
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+
+	local bonusState = QuestTogether:GetTaskAreaStateStore("bonus")
+	bonusState[77771] = "Tracked Bonus Objective"
+	QuestTogether:GetPlayerTracker()[77771] = {
+		title = "Tracked Bonus Objective",
+		taskAnnouncementType = "bonus",
+	}
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		QuestTogether:ClearTrackedQuestState(77771)
+	end)
+
+	AssertEquals(events[1].eventType, "BONUS_OBJECTIVE_LEFT")
+	AssertEquals(events[1].questId, 77771)
+	AssertTrue(string.find(events[1].text, "Tracked Bonus Objective", 1, true) ~= nil)
 end)
 
 QuestTogether:RegisterTest("super tracking changed defers task area refresh off the live event stack", function()
