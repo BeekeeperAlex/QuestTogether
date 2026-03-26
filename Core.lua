@@ -554,11 +554,6 @@ QuestTogether.runtimeEvents = {
 	"QUEST_POI_UPDATE",
 	"AREA_POIS_UPDATED",
 	"PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED",
-	"SCENARIO_UPDATE",
-	"SCENARIO_CRITERIA_UPDATE",
-	"SCENARIO_COMPLETED",
-	"SCENARIO_BONUS_OBJECTIVE_COMPLETE",
-	"SCENARIO_CRITERIA_SHOW_STATE_UPDATE",
 	"ZONE_CHANGED",
 	"ZONE_CHANGED_INDOORS",
 	"ZONE_CHANGED_NEW_AREA",
@@ -717,13 +712,20 @@ QuestTogether.API = QuestTogether.API or {
 	Random = function(low, high)
 		return math.random(low, high)
 	end,
-	GetTime = function()
-		return GetTime()
-	end,
-	IsModifiedClick = function(action)
-		if type(IsModifiedClick) ~= "function" then
-			return false
-		end
+		GetTime = function()
+			return GetTime()
+		end,
+		ReloadUI = function()
+			if type(ReloadUI) ~= "function" then
+				return false
+			end
+			local ok = pcall(ReloadUI)
+			return ok and true or false
+		end,
+		IsModifiedClick = function(action)
+			if type(IsModifiedClick) ~= "function" then
+				return false
+			end
 		local ok, modified = pcall(IsModifiedClick, action)
 		return ok and modified and true or false
 	end,
@@ -1326,108 +1328,6 @@ QuestTogether.API = QuestTogether.API or {
 			end
 			return titleInfo
 		end,
-		GetScenarioInfo = function()
-			if not (C_ScenarioInfo and C_ScenarioInfo.GetScenarioInfo) then
-				return nil
-			end
-			local ok, scenarioInfo = pcall(C_ScenarioInfo.GetScenarioInfo)
-			if not ok or type(scenarioInfo) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(scenarioInfo) then
-				return nil
-			end
-			return scenarioInfo
-		end,
-		GetScenarioStepInfo = function(stepID)
-			if not (C_ScenarioInfo and C_ScenarioInfo.GetScenarioStepInfo) then
-				return nil
-			end
-			local ok, stepInfo = pcall(C_ScenarioInfo.GetScenarioStepInfo, stepID)
-			if not ok or type(stepInfo) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(stepInfo) then
-				return nil
-			end
-			return stepInfo
-		end,
-		GetScenarioCriteriaInfo = function(criteriaIndex)
-			if not (C_ScenarioInfo and C_ScenarioInfo.GetCriteriaInfo) then
-				return nil
-			end
-			local numericCriteriaIndex = QuestTogether and QuestTogether.SafeToNumber
-				and QuestTogether:SafeToNumber(criteriaIndex)
-				or nil
-			if numericCriteriaIndex == nil then
-				return nil
-			end
-			numericCriteriaIndex = math.floor(numericCriteriaIndex + 0.5)
-			if numericCriteriaIndex <= 0 then
-				return nil
-			end
-			local ok, criteriaInfo = pcall(C_ScenarioInfo.GetCriteriaInfo, numericCriteriaIndex)
-			if not ok or type(criteriaInfo) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(criteriaInfo) then
-				return nil
-			end
-			return criteriaInfo
-		end,
-		HasActiveDelve = function()
-			if not (C_DelvesUI and C_DelvesUI.HasActiveDelve) then
-				return false
-			end
-			local ok, hasActiveDelve = pcall(C_DelvesUI.HasActiveDelve)
-			return ok and hasActiveDelve and true or false
-		end,
-		GetAllWidgetsBySetID = function(widgetSetID)
-			if not (C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID) then
-				return nil
-			end
-			local numericWidgetSetID = QuestTogether and QuestTogether.SafeToNumber
-				and QuestTogether:SafeToNumber(widgetSetID)
-				or nil
-			if numericWidgetSetID == nil then
-				return nil
-			end
-			numericWidgetSetID = math.floor(numericWidgetSetID + 0.5)
-			if numericWidgetSetID <= 0 then
-				return nil
-			end
-			local ok, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, numericWidgetSetID)
-			if not ok or type(widgets) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(widgets) then
-				return nil
-			end
-			return widgets
-		end,
-		GetScenarioHeaderDelvesWidgetVisualizationInfo = function(widgetID)
-			if not (C_UIWidgetManager and C_UIWidgetManager.GetScenarioHeaderDelvesWidgetVisualizationInfo) then
-				return nil
-			end
-			local numericWidgetID = QuestTogether and QuestTogether.SafeToNumber
-				and QuestTogether:SafeToNumber(widgetID)
-				or nil
-			if numericWidgetID == nil then
-				return nil
-			end
-			numericWidgetID = math.floor(numericWidgetID + 0.5)
-			if numericWidgetID <= 0 then
-				return nil
-			end
-			local ok, widgetInfo = pcall(C_UIWidgetManager.GetScenarioHeaderDelvesWidgetVisualizationInfo, numericWidgetID)
-			if not ok or type(widgetInfo) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(widgetInfo) then
-				return nil
-			end
-			return widgetInfo
-		end,
 		GetNumQuestLeaderBoards = function(questLogIndex)
 			if InCombatLockdown and InCombatLockdown() then
 				return 0
@@ -1732,6 +1632,27 @@ QuestTogether.API = QuestTogether.API or {
 				return tooltipData
 			end
 			return nil
+		end,
+		SurfaceTooltipDataArgs = function(tooltipData)
+			if type(tooltipData) ~= "table" then
+				return tooltipData
+			end
+			if not (TooltipUtil and type(TooltipUtil.SurfaceArgs) == "function") then
+				return tooltipData
+			end
+
+			local ok, surfacedTooltipData = pcall(TooltipUtil.SurfaceArgs, tooltipData)
+			if not ok then
+				return tooltipData
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(surfacedTooltipData) then
+				return tooltipData
+			end
+			if type(surfacedTooltipData) == "table" then
+				return surfacedTooltipData
+			end
+
+			return tooltipData
 		end,
 		IsWarModeActive = function()
 			if C_PvP and C_PvP.IsWarModeDesired then
@@ -3832,11 +3753,6 @@ function QuestTogether:GetAnnouncementOptionKey(eventType)
 		QUEST_READY_TO_TURN_IN = "announceReadyToTurnIn",
 		QUEST_REMOVED = "announceRemoved",
 		QUEST_PROGRESS = "announceProgress",
-		DELVE_ENTERED = "announceAccepted",
-		DELVE_LEFT = "announceRemoved",
-		DELVE_OBJECTIVE_ENTERED = "announceProgress",
-		DELVE_OBJECTIVE_PROGRESS = "announceProgress",
-		DELVE_OBJECTIVE_COMPLETED = "announceCompleted",
 		WORLD_QUEST_ENTERED = "announceWorldQuestAreaEnter",
 		WORLD_QUEST_LEFT = "announceWorldQuestAreaLeave",
 		WORLD_QUEST_PROGRESS = "announceWorldQuestProgress",
@@ -3862,14 +3778,6 @@ function QuestTogether:IsBonusObjectiveAnnouncementType(eventType)
 		or eventType == "BONUS_OBJECTIVE_LEFT"
 		or eventType == "BONUS_OBJECTIVE_PROGRESS"
 		or eventType == "BONUS_OBJECTIVE_COMPLETED"
-end
-
-function QuestTogether:IsDelveAnnouncementType(eventType)
-	return eventType == "DELVE_ENTERED"
-		or eventType == "DELVE_LEFT"
-		or eventType == "DELVE_OBJECTIVE_ENTERED"
-		or eventType == "DELVE_OBJECTIVE_PROGRESS"
-		or eventType == "DELVE_OBJECTIVE_COMPLETED"
 end
 
 function QuestTogether:ShouldDisplayAnnouncementType(eventType)
@@ -4232,9 +4140,6 @@ function QuestTogether:Enable()
 	if self.ResetTaskAreaStateStore then
 		self:ResetTaskAreaStateStore()
 	end
-	if self.ResetDelveObjectiveStateStore then
-		self:ResetDelveObjectiveStateStore()
-	end
 	if self.ResetRuntimeWorkStateStore then
 		self:ResetRuntimeWorkStateStore()
 	end
@@ -4243,9 +4148,6 @@ function QuestTogether:Enable()
 	end
 	if self.RefreshTaskAreaStates then
 		self:RefreshTaskAreaStates(false)
-	end
-	if self.RefreshDelveObjectiveStates then
-		self:RefreshDelveObjectiveStates(false, "Enable")
 	end
 
 	if self.EnableNameplateAugmentation then
@@ -4270,11 +4172,6 @@ function QuestTogether:Enable()
 			self:ScanQuestLog()
 		end
 	end)
-	self.API.Delay(0.5, function()
-		if self.isEnabled and self.RefreshDelveObjectiveStates then
-			self:RefreshDelveObjectiveStates(false, "EnableDelayed")
-		end
-	end)
 
 	return true
 end
@@ -4290,9 +4187,6 @@ function QuestTogether:Disable()
 	self.isEnabled = false
 	if self.ResetTaskAreaStateStore then
 		self:ResetTaskAreaStateStore()
-	end
-	if self.ResetDelveObjectiveStateStore then
-		self:ResetDelveObjectiveStateStore()
 	end
 	if self.ResetRuntimeWorkStateStore then
 		self:ResetRuntimeWorkStateStore()
@@ -4359,6 +4253,18 @@ end
 function QuestTogether:ClearDebugWindow()
 	self:ClearDebugLog()
 	self:ResetDebugLogFilters()
+end
+
+function QuestTogether:IsDebugWindowShowingAllCategory()
+	local frame = self.copyableWindow
+	if not frame or frame.copyableTitle ~= DEBUG_WINDOW_TITLE then
+		return false
+	end
+	if type(frame.IsShown) ~= "function" or not frame:IsShown() then
+		return false
+	end
+
+	return self:GetDebugLogCategoryFilter() == self.DEBUG_ALL_CATEGORIES
 end
 
 function QuestTogether:NormalizeDebugCategory(category)
@@ -4863,14 +4769,17 @@ function QuestTogether:RefreshCopyableWindow()
 	if type(InputScrollFrame_OnTextChanged) == "function" then
 		InputScrollFrame_OnTextChanged(frame.editBox, false)
 	end
-	if frame.clearButton then
-		local hasClearHandler = type(frame.copyableOnClear) == "function"
-		frame.clearButton:SetShown(hasClearHandler)
-		frame.clearButton:SetText(type(frame.copyableClearLabel) == "string" and frame.copyableClearLabel or "Clear")
-	end
-	if frame.runTestsButton then
-		frame.runTestsButton:SetShown(isDebugLogWindow and type(self.RunTests) == "function")
-	end
+		if frame.clearButton then
+			local hasClearHandler = type(frame.copyableOnClear) == "function"
+			frame.clearButton:SetShown(hasClearHandler)
+			frame.clearButton:SetText(type(frame.copyableClearLabel) == "string" and frame.copyableClearLabel or "Clear")
+		end
+		if frame.reloadButton then
+			frame.reloadButton:SetShown(isDebugLogWindow and self.API and type(self.API.ReloadUI) == "function")
+		end
+		if frame.runTestsButton then
+			frame.runTestsButton:SetShown(isDebugLogWindow and type(self.RunTests) == "function")
+		end
 	if frame.categoryFilterLabel then
 		frame.categoryFilterLabel:SetShown(isDebugLogWindow)
 	end
@@ -4922,6 +4831,15 @@ function QuestTogether:RefreshCopyableWindow()
 end
 
 function QuestTogether:EnsureCopyableWindow()
+	if self.copyableWindow then
+		if self.IsForbiddenFrame and self:IsForbiddenFrame(self.copyableWindow) then
+			self.copyableWindow = nil
+		elseif type(self.copyableWindow.Show) == "function" and type(self.copyableWindow.Raise) == "function" then
+			return self.copyableWindow
+		else
+			self.copyableWindow = nil
+		end
+	end
 	if self.copyableWindow then
 		return self.copyableWindow
 	end
@@ -5042,9 +4960,20 @@ function QuestTogether:EnsureCopyableWindow()
 		end
 	end)
 
+	local reloadButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	reloadButton:SetSize(80, 24)
+	reloadButton:SetPoint("LEFT", clearButton, "RIGHT", 8, 0)
+	reloadButton:SetText("Reload UI")
+	reloadButton:SetScript("OnClick", function()
+		if QuestTogether.API and type(QuestTogether.API.ReloadUI) == "function" then
+			QuestTogether.API.ReloadUI()
+		end
+	end)
+	reloadButton:Hide()
+
 	local runTestsButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 	runTestsButton:SetSize(96, 24)
-	runTestsButton:SetPoint("LEFT", clearButton, "RIGHT", 8, 0)
+	runTestsButton:SetPoint("LEFT", reloadButton, "RIGHT", 8, 0)
 	runTestsButton:SetText("Run Tests")
 	runTestsButton:SetScript("OnClick", function()
 		if QuestTogether.RunTests then
@@ -5112,9 +5041,10 @@ function QuestTogether:EnsureCopyableWindow()
 
 		frame.scrollFrame = scrollFrame
 		frame.textInset = textInset
-		frame.editBox = editBox
+	frame.editBox = editBox
 	frame.selectAllButton = selectAllButton
 	frame.clearButton = clearButton
+	frame.reloadButton = reloadButton
 	frame.runTestsButton = runTestsButton
 	frame.closeButton = closeButton
 	frame.categoryFilterLabel = categoryFilterLabel

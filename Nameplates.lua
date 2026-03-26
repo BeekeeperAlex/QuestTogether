@@ -78,32 +78,22 @@ local function PrintOneShotNameplateDebug(addon, key, message)
 	end
 end
 
-local function PrintOneShotDelveDebug(addon, key, message)
-	if not addon or not addon.GetRuntimeFlag or not addon.SetRuntimeFlag then
-		return
-	end
-	if addon:GetRuntimeFlag(key, false) then
-		return
-	end
-	addon:SetRuntimeFlag(key, true)
-	if addon.LogDebugLine then
-		addon:LogDebugLine(SafeText(message, ""), {
-			category = "delve",
-		})
-	elseif addon.AppendDebugLogLine then
-		addon:AppendDebugLogLine(SafeText(message, ""))
-	end
-end
-
 local function ShouldSuppressStructuredQuestTooltipSource(addon)
 	if not addon or not addon.CanUseStructuredQuestTooltipAPI then
 		return false
 	end
 
-	-- On mainline clients the shared C_TooltipInfo quest path can taint Blizzard's
-	-- world-map quest progress-bar tooltips. Keep using addon-owned Questie data when
-	-- available, but suppress Blizzard's structured tooltip source there.
-	return addon:CanUseStructuredQuestTooltipAPI()
+	-- The retail structured tooltip path is only risky while Blizzard's shared
+	-- world-map tooltip/widget flow is active.
+	if not addon:CanUseStructuredQuestTooltipAPI() then
+		return false
+	end
+
+	if addon.API and type(addon.API.IsWorldMapVisible) == "function" then
+		return addon.API.IsWorldMapVisible() == true
+	end
+
+	return false
 end
 
 local function IsFrameForbidden(frame)
@@ -1159,20 +1149,9 @@ function QuestTogether:GetAccessibleNameplateFrameForUnit(unitToken, requireShow
 end
 
 -- Plater's update_quest_cache bails in instances in local retail Plater.lua:11373-11376.
--- QuestTogether mostly applies that same open-world boundary, but active Delves are a
--- deliberate exception because their objective state now comes from the Delve subsystem.
 function QuestTogether:IsNameplateAugmentationBlockedInCurrentContext()
 	local isInInstance = self.API and self.API.IsInInstance and self.API.IsInInstance()
-	if not isInInstance then
-		return false
-	end
-	if self.IsActiveDelveScenario then
-		local isDelveActive = self:IsActiveDelveScenario()
-		if isDelveActive then
-			return false
-		end
-	end
-	return true
+	return isInInstance and true or false
 end
 
 function QuestTogether:IsNameplateUnitPlayer(unitToken)
@@ -1274,10 +1253,7 @@ local function IsKnownQuestTitleLine(text)
 	if trimmedText == "" then
 		return false
 	end
-	if QuestTogether and QuestTogether.nameplateQuestTitleCache and QuestTogether.nameplateQuestTitleCache[trimmedText] then
-		return true
-	end
-	return QuestTogether and QuestTogether.delveObjectiveTitleCache and QuestTogether.delveObjectiveTitleCache[trimmedText]
+	return QuestTogether and QuestTogether.nameplateQuestTitleCache and QuestTogether.nameplateQuestTitleCache[trimmedText]
 		or false
 end
 
@@ -1332,17 +1308,120 @@ local function IsTooltipQuestTitleLineType(lineType)
 	return false
 end
 
-local function GetTooltipQuestLinePrimaryText(lineData)
+local function TryGetTooltipCandidateText(addon, candidateText)
+	if addon and addon.IsSecretValue and addon:IsSecretValue(candidateText) then
+		return nil
+	end
+	if type(candidateText) ~= "string" then
+		return nil
+	end
+
+	candidateText = SafeTrimText(candidateText)
+	if candidateText == "" then
+		return nil
+	end
+
+	return candidateText
+end
+
+local function GetTooltipStructuredArgText(addon, argData, depth)
+	depth = SafeUiNumber(depth, 0) or 0
+	if depth > 2 then
+		return nil
+	end
+
+	if addon and addon.IsSecretValue and addon:IsSecretValue(argData) then
+		return nil
+	end
+	if type(argData) == "string" then
+		return TryGetTooltipCandidateText(addon, argData)
+	end
+	if type(argData) ~= "table" then
+		return nil
+	end
+
+	local candidateText = TryGetTooltipCandidateText(addon, argData.leftText)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.text)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.rightText)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.stringVal)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.name)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.unitName)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.title)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, argData.value)
+	if candidateText then
+		return candidateText
+	end
+
+	local declaredField = SafeText(argData.field or argData.key, "")
+	if declaredField ~= "" then
+		local declaredValue = TryGetTooltipCandidateText(addon, argData.stringVal)
+		if declaredValue then
+			return declaredValue
+		end
+	end
+
+	for key, value in pairs(argData) do
+		if key ~= "field" and key ~= "key" then
+			local directValue = TryGetTooltipCandidateText(addon, value)
+			if directValue then
+				return directValue
+			end
+			if type(value) == "table" and not (addon and addon.IsSecretValue and addon:IsSecretValue(value)) then
+				local nestedText = GetTooltipStructuredArgText(addon, value, depth + 1)
+				if nestedText then
+					return nestedText
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+local function GetTooltipQuestLinePrimaryText(lineData, addon)
 	if type(lineData) ~= "table" then
 		return nil
 	end
 
-	local leftText = SafeTrimText(lineData.leftText)
-	if leftText ~= "" then
-		return leftText
+	local candidateText = TryGetTooltipCandidateText(addon, lineData.leftText)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, lineData.text)
+	if candidateText then
+		return candidateText
+	end
+	candidateText = TryGetTooltipCandidateText(addon, lineData.rightText)
+	if candidateText then
+		return candidateText
 	end
 
-	return nil
+	local args = lineData.args
+	if addon and addon.IsSecretValue and addon:IsSecretValue(args) then
+		return nil
+	end
+	return GetTooltipStructuredArgText(addon, args, 0)
 end
 
 local function IsThreatTooltipMarkerText(text)
@@ -1357,18 +1436,50 @@ local function IsThreatTooltipMarkerText(text)
 end
 
 local function GetTooltipQuestLeftText(addon, lineData)
-	local leftText = lineData and lineData.leftText or nil
-	if addon and addon.IsSecretValue then
-		if addon:IsSecretValue(leftText) then
-			leftText = nil
-		end
-	end
-
+	local leftText = GetTooltipQuestLinePrimaryText(lineData, addon)
 	if type(leftText) ~= "string" then
 		return ""
 	end
 
 	return SafeTrimText(leftText)
+end
+
+local function NormalizeTooltipObjectiveEvidenceText(text)
+	local normalizedText = SafeTrimText(text)
+	if normalizedText == "" then
+		return ""
+	end
+
+	normalizedText = string.gsub(normalizedText, "^[-%*%+%s]+", "")
+
+	local trimmedPrefix = SafeMatch(normalizedText, "^(.-):%s*%d+%s*/%s*%d+$")
+	if type(trimmedPrefix) == "string" and trimmedPrefix ~= "" then
+		normalizedText = SafeTrimText(trimmedPrefix)
+	end
+
+	local percentPrefix = SafeMatch(normalizedText, "^(.-)%s*%(%d+%%%s*%)$")
+	if type(percentPrefix) == "string" and percentPrefix ~= "" then
+		normalizedText = SafeTrimText(percentPrefix)
+	end
+
+	return normalizedText
+end
+
+local function GetKnownTooltipQuestText(text)
+	local primaryText = SafeTrimText(text)
+	if primaryText == "" then
+		return nil
+	end
+	if IsKnownQuestTitleLine(primaryText) then
+		return primaryText
+	end
+
+	local normalizedText = NormalizeTooltipObjectiveEvidenceText(primaryText)
+	if normalizedText ~= "" and IsKnownQuestTitleLine(normalizedText) then
+		return normalizedText
+	end
+
+	return nil
 end
 
 -- Mirrors Plater.IsQuestObjective (local retail Plater.lua:11219-11347):
@@ -1380,7 +1491,31 @@ function QuestTogether:TooltipLineHasUnfinishedObjectiveEvidence(lineData)
 		return true
 	end
 
+	if
+		leftText ~= ""
+		and IsTooltipQuestObjectiveLineType(lineData and lineData.type or nil)
+		and GetKnownTooltipQuestText(leftText) ~= nil
+	then
+		return true
+	end
+
 	return false
+end
+
+function QuestTogether:ShouldKeepTooltipLineForQuestDetection(lineData)
+	if type(lineData) ~= "table" or self:IsSecretValue(lineData) then
+		return false
+	end
+
+	local leftText = self:SanitizeTooltipQuestLineText(GetTooltipQuestLinePrimaryText(lineData, self))
+	if not leftText then
+		return false
+	end
+	if GetKnownTooltipQuestText(leftText) ~= nil then
+		return true
+	end
+
+	return GetObjectiveProgressState(leftText) ~= "unknown"
 end
 
 function QuestTogether:EvaluateTooltipQuestObjectiveLines(tooltipLines)
@@ -1401,14 +1536,16 @@ function QuestTogether:EvaluateTooltipQuestObjectiveLines(tooltipLines)
 		end
 
 		local primaryText = GetTooltipQuestLinePrimaryText(lineData)
-		if IsKnownQuestTitleLine(primaryText) then
-			matchedQuestTitle = true
-		elseif matchedQuestTitle then
+		if matchedQuestTitle then
 			if IsThreatTooltipMarkerText(primaryText) then
 				matchedQuestTitle = false
 			elseif self:TooltipLineHasUnfinishedObjectiveEvidence(lineData) then
 				return true
+			elseif IsKnownQuestTitleLine(primaryText) then
+				matchedQuestTitle = true
 			end
+		elseif IsKnownQuestTitleLine(primaryText) then
+			matchedQuestTitle = true
 		end
 	end
 
@@ -1463,10 +1600,6 @@ function QuestTogether:MaybeScheduleNameplateTooltipGuidRetry(unitToken, reason)
 	if not self:IsNameplateUnitToken(unitToken) then
 		return false
 	end
-	if self.DoesNameplateUnitExist and not self:DoesNameplateUnitExist(unitToken) then
-		self:ClearNameplateTooltipResolveRetryCount(unitToken)
-		return false
-	end
 
 	local retryCount = self:GetNameplateTooltipResolveRetryCount(unitToken)
 	if retryCount >= NAMEPLATE_TOOLTIP_GUID_RETRY_MAX_ATTEMPTS then
@@ -1475,6 +1608,13 @@ function QuestTogether:MaybeScheduleNameplateTooltipGuidRetry(unitToken, reason)
 	end
 
 	self.nameplateTooltipResolveRetryCountByUnitToken[unitToken] = retryCount + 1
+	if self.ScheduleNameplatePresentationRefresh then
+		self:ScheduleNameplatePresentationRefresh(
+			reason or "NameplateTooltipGuidRetry",
+			NAMEPLATE_TOOLTIP_GUID_RETRY_DELAY_SECONDS
+		)
+		return true
+	end
 	if self.ScheduleNameplateTooltipResolution then
 		self:ScheduleNameplateTooltipResolution(
 			unitToken,
@@ -1482,7 +1622,7 @@ function QuestTogether:MaybeScheduleNameplateTooltipGuidRetry(unitToken, reason)
 			NAMEPLATE_TOOLTIP_GUID_RETRY_DELAY_SECONDS,
 			reason or "NameplateTooltipGuidRetry"
 		)
-		return true
+			return true
 	end
 
 	return false
@@ -1518,26 +1658,18 @@ function QuestTogether:TryGetCachedQuestObjectiveStateForGuid(unitGuid)
 	return true, cachedQuestObjective == true
 end
 
--- QuestTogether keeps the title cache on addon-owned quest and Delve state only.
+-- QuestTogether keeps the title cache on addon-owned quest snapshot state only.
 -- Plater also adds current-map world quest titles from C_TaskQuest map arrays,
 -- but those map-owned tables taint Blizzard POI/widget paths on the default UI.
--- Hidden quest-log rows plus Delve scenario snapshots cover active objective titles
--- without touching shared map state, which keeps default-nameplate detection boundary-safe.
 function QuestTogether:RebuildNameplateQuestTitleCache()
 	wipe(self.nameplateQuestTitleCache)
 
-	local isDelveActive = self.IsActiveDelveScenario and self:IsActiveDelveScenario() or false
-
-	if self.API and self.API.IsInInstance and self.API.IsInInstance() and not isDelveActive then
+	if self.API and self.API.IsInInstance and self.API.IsInInstance() then
 		return
 	end
 
 	if self.EnsureQuestSnapshotStore then
 		self:EnsureQuestSnapshotStore()
-	end
-	local delveTitleCache = self.GetDelveObjectiveTitleCache and self:GetDelveObjectiveTitleCache() or nil
-	if isDelveActive and self.RebuildDelveObjectiveStateStore and next(delveTitleCache or {}) == nil then
-		self:RebuildDelveObjectiveStateStore()
 	end
 
 	local snapshotByQuestID = self.GetQuestSnapshotByQuestID and self:GetQuestSnapshotByQuestID() or nil
@@ -1552,35 +1684,6 @@ function QuestTogether:RebuildNameplateQuestTitleCache()
 		if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
 			self.nameplateQuestTitleCache[questDetails.title] = true
 		end
-	end
-
-	delveTitleCache = self.GetDelveObjectiveTitleCache and self:GetDelveObjectiveTitleCache() or nil
-	for titleText in pairs(delveTitleCache or {}) do
-		if type(titleText) == "string" and titleText ~= "" then
-			self.nameplateQuestTitleCache[titleText] = true
-		end
-	end
-
-	if isDelveActive then
-		local delveTitles = {}
-		for titleText in pairs(delveTitleCache or {}) do
-			delveTitles[#delveTitles + 1] = titleText
-		end
-		table.sort(delveTitles)
-		if #delveTitles > 3 then
-			while #delveTitles > 3 do
-				table.remove(delveTitles)
-			end
-		end
-				PrintOneShotDelveDebug(
-					self,
-					"debugDelveNameplateCache",
-					string.format(
-						"nameplate_cache titles=%s mergedCount=%d",
-						table.concat(delveTitles, "|"),
-						#delveTitles
-					)
-			)
 	end
 end
 
@@ -1607,24 +1710,62 @@ function QuestTogether:GetNameplateTooltipScanGuid(unitToken, unitFrame)
 	end
 
 	local plateFrame = unitFrame and unitFrame.PlateFrame or nil
+	if (not plateFrame) and unitFrame and unitFrame.GetParent then
+		local okParent, parentFrame = pcall(unitFrame.GetParent, unitFrame)
+		if okParent and not IsFrameForbidden(parentFrame) then
+			plateFrame = parentFrame
+		end
+	end
 	if IsFrameForbidden(plateFrame) then
 		plateFrame = nil
 	end
 
-	local unitFrameGuid = unitFrame and unitFrame.namePlateUnitGUID or nil
-	if self:IsSecretValue(unitFrameGuid) then
-		unitFrameGuid = nil
+	local candidateGuid = unitFrame and unitFrame.namePlateUnitGUID or nil
+	if self:IsSecretValue(candidateGuid) then
+		candidateGuid = nil
 	end
-	if IsNonEmptyString(unitFrameGuid) then
-		return unitFrameGuid
+	if IsNonEmptyString(candidateGuid) then
+		return candidateGuid
 	end
 
-	local plateFrameGuid = plateFrame and plateFrame.namePlateUnitGUID or nil
-	if self:IsSecretValue(plateFrameGuid) then
-		plateFrameGuid = nil
+	candidateGuid = unitFrame and unitFrame.unitGUID or nil
+	if self:IsSecretValue(candidateGuid) then
+		candidateGuid = nil
 	end
-	if IsNonEmptyString(plateFrameGuid) then
-		return plateFrameGuid
+	if IsNonEmptyString(candidateGuid) then
+		return candidateGuid
+	end
+
+	candidateGuid = unitFrame and unitFrame.guid or nil
+	if self:IsSecretValue(candidateGuid) then
+		candidateGuid = nil
+	end
+	if IsNonEmptyString(candidateGuid) then
+		return candidateGuid
+	end
+
+	candidateGuid = plateFrame and plateFrame.namePlateUnitGUID or nil
+	if self:IsSecretValue(candidateGuid) then
+		candidateGuid = nil
+	end
+	if IsNonEmptyString(candidateGuid) then
+		return candidateGuid
+	end
+
+	candidateGuid = plateFrame and plateFrame.unitGUID or nil
+	if self:IsSecretValue(candidateGuid) then
+		candidateGuid = nil
+	end
+	if IsNonEmptyString(candidateGuid) then
+		return candidateGuid
+	end
+
+	candidateGuid = plateFrame and plateFrame.guid or nil
+	if self:IsSecretValue(candidateGuid) then
+		candidateGuid = nil
+	end
+	if IsNonEmptyString(candidateGuid) then
+		return candidateGuid
 	end
 
 	local liveGuid = self:GetNameplateUnitGuid(unitToken)
@@ -1685,8 +1826,9 @@ function QuestTogether:SanitizeTooltipQuestLineText(textValue)
 end
 
 -- Plater keeps only QuestObjective, QuestTitle, and QuestPlayer lines from
--- C_TooltipInfo in local retail Plater.lua:11197-11203. QuestTogether applies
--- the same line-type filter before any parsing and ignores all other payload data.
+-- C_TooltipInfo in local retail Plater.lua:11197-11203. QuestTogether mirrors
+-- that default filter, but also preserves generic lines that already look like
+-- quest titles or objective progress after addon-owned normalization.
 function QuestTogether:SanitizeTooltipLineForQuestDetection(lineData)
 	if type(lineData) ~= "table" or self:IsSecretValue(lineData) then
 		return nil
@@ -1700,11 +1842,12 @@ function QuestTogether:SanitizeTooltipLineForQuestDetection(lineData)
 		not IsTooltipQuestObjectiveLineType(lineType)
 		and not IsTooltipQuestTitleLineType(lineType)
 		and not IsTooltipQuestPlayerLineType(lineType)
+		and not self:ShouldKeepTooltipLineForQuestDetection(lineData)
 	then
 		return nil
 	end
 
-	local leftText = self:SanitizeTooltipQuestLineText(lineData.leftText)
+	local leftText = self:SanitizeTooltipQuestLineText(GetTooltipQuestLinePrimaryText(lineData, self))
 	if not leftText then
 		return nil
 	end
@@ -1718,6 +1861,12 @@ end
 function QuestTogether:ExtractQuestObjectiveTooltipLinesFromTooltipData(tooltipData)
 	if type(tooltipData) ~= "table" or self:IsSecretValue(tooltipData) then
 		return nil
+	end
+	if self.API and type(self.API.SurfaceTooltipDataArgs) == "function" then
+		local surfacedTooltipData = self.API.SurfaceTooltipDataArgs(tooltipData)
+		if type(surfacedTooltipData) == "table" and not self:IsSecretValue(surfacedTooltipData) then
+			tooltipData = surfacedTooltipData
+		end
 	end
 
 	local tooltipLineData = tooltipData.lines
@@ -1734,6 +1883,31 @@ function QuestTogether:ExtractQuestObjectiveTooltipLinesFromTooltipData(tooltipD
 	end
 
 	return tooltipLines
+end
+
+function QuestTogether:GetStructuredQuestObjectiveTooltipLinesFromUnit(unitToken)
+	if type(unitToken) ~= "string" or unitToken == "" then
+		return nil
+	end
+	if not self:IsNameplateUnitToken(unitToken) then
+		return nil
+	end
+	if not self.API or type(self.API.GetTooltipDataForUnit) ~= "function" then
+		return nil
+	end
+
+	return self.API.GetTooltipDataForUnit(unitToken)
+end
+
+function QuestTogether:GetStructuredQuestObjectiveTooltipLinesFromHyperlink(unitGuid)
+	if type(unitGuid) ~= "string" or unitGuid == "" then
+		return nil
+	end
+	if not self.API or type(self.API.GetTooltipDataForHyperlink) ~= "function" then
+		return nil
+	end
+
+	return self.API.GetTooltipDataForHyperlink("unit:" .. unitGuid)
 end
 
 -- Questie is Plater's first quest-tooltip source in local retail Plater.lua:11191-11196.
@@ -1791,24 +1965,44 @@ end
 
 -- Structured Blizzard tooltip data is Plater's second source on retail/mainline
 -- in local retail Plater.lua:11208-11218 after Questie.
-function QuestTogether:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid)
+function QuestTogether:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid, structuredSource)
 	if ShouldSuppressStructuredQuestTooltipSource(self) then
 		return nil
 	end
 
 	if type(unitGuid) ~= "string" or unitGuid == "" then
-		return nil
+		if structuredSource ~= "unit" then
+			return nil
+		end
 	end
 	if not self.API then
 		return nil
-	end
-
-	if type(self.API.GetTooltipDataForHyperlink) == "function" then
-		local tooltipLines =
-			self:ExtractQuestObjectiveTooltipLinesFromTooltipData(self.API.GetTooltipDataForHyperlink("unit:" .. unitGuid))
-		if type(tooltipLines) == "table" and #tooltipLines > 0 then
-			return tooltipLines
 		end
+
+		local tooltipData = nil
+		local sourceLabel = structuredSource
+		if sourceLabel == "unit" then
+		tooltipData = self:GetStructuredQuestObjectiveTooltipLinesFromUnit(unitToken)
+	elseif sourceLabel == "hyperlink" or sourceLabel == nil then
+		tooltipData = self:GetStructuredQuestObjectiveTooltipLinesFromHyperlink(unitGuid)
+		if sourceLabel == nil then
+			sourceLabel = "hyperlink"
+		end
+	else
+		return nil
+		end
+
+		if tooltipData ~= nil then
+			if self.API and type(self.API.SurfaceTooltipDataArgs) == "function" then
+				local surfacedTooltipData = self.API.SurfaceTooltipDataArgs(tooltipData)
+				if type(surfacedTooltipData) == "table" and not self:IsSecretValue(surfacedTooltipData) then
+					tooltipData = surfacedTooltipData
+				end
+			end
+			local tooltipLines = self:ExtractQuestObjectiveTooltipLinesFromTooltipData(tooltipData)
+			if type(tooltipLines) == "table" and #tooltipLines > 0 then
+				return tooltipLines
+			end
 	end
 
 	return nil
@@ -1816,8 +2010,8 @@ end
 
 -- The hidden GameTooltip scan is only the non-mainline branch in Plater.IsQuestObjective
 -- at local retail Plater.lua:11219-11226. On retail clients, Plater stops after C_TooltipInfo.
-function QuestTogether:GetHiddenQuestObjectiveTooltipLines(unitGuid)
-	if type(unitGuid) ~= "string" or unitGuid == "" then
+function QuestTogether:GetHiddenQuestObjectiveTooltipLines(unitToken, unitGuid)
+	if (type(unitToken) ~= "string" or unitToken == "") and (type(unitGuid) ~= "string" or unitGuid == "") then
 		return nil
 	end
 
@@ -1826,12 +2020,14 @@ function QuestTogether:GetHiddenQuestObjectiveTooltipLines(unitGuid)
 		return nil
 	end
 
-	return self:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
+	return self:ReadNameplateScanTooltipLines(scanTooltip, unitToken, unitGuid)
 end
 
 function QuestTogether:GetQuestObjectiveTooltipLineSources(unitToken, unitGuid)
 	if type(unitGuid) ~= "string" or unitGuid == "" then
-		return {}
+		if not self:IsNameplateUnitToken(unitToken) then
+			return {}
+		end
 	end
 
 	local sourceOrder = {}
@@ -1843,9 +2039,15 @@ function QuestTogether:GetQuestObjectiveTooltipLineSources(unitToken, unitGuid)
 		end,
 	}
 	sourceOrder[#sourceOrder + 1] = {
-		name = "structured",
+		name = "structured_unit",
 		resolve = function()
-			return self:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid)
+			return self:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid, "unit")
+		end,
+	}
+	sourceOrder[#sourceOrder + 1] = {
+		name = "structured_hyperlink",
+		resolve = function()
+			return self:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid, "hyperlink")
 		end,
 	}
 
@@ -1853,7 +2055,7 @@ function QuestTogether:GetQuestObjectiveTooltipLineSources(unitToken, unitGuid)
 		sourceOrder[#sourceOrder + 1] = {
 			name = "hidden",
 			resolve = function()
-				return self:GetHiddenQuestObjectiveTooltipLines(unitGuid)
+				return self:GetHiddenQuestObjectiveTooltipLines(unitToken, unitGuid)
 			end,
 		}
 	end
@@ -1866,7 +2068,7 @@ function QuestTogether:CanUseStructuredQuestTooltipAPI()
 		return false
 	end
 
-	return type(self.API.GetTooltipDataForHyperlink) == "function"
+	return type(self.API.GetTooltipDataForUnit) == "function" or type(self.API.GetTooltipDataForHyperlink) == "function"
 end
 
 -- Test/helper entry point that mirrors Plater's source order for the current
@@ -1973,8 +2175,8 @@ function QuestTogether:GetNameplateScanTooltipLeftText(scanTooltip, lineIndex)
 	return textValue
 end
 
-function QuestTogether:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
-	if not scanTooltip or IsFrameForbidden(scanTooltip) or type(unitGuid) ~= "string" or unitGuid == "" then
+function QuestTogether:ReadNameplateScanTooltipLines(scanTooltip, unitToken, unitGuid)
+	if not scanTooltip or IsFrameForbidden(scanTooltip) then
 		return nil
 	end
 
@@ -1989,11 +2191,21 @@ function QuestTogether:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
 	if ownerFrame and scanTooltip.SetOwner then
 		pcall(scanTooltip.SetOwner, scanTooltip, ownerFrame, "ANCHOR_NONE")
 	end
-	if not scanTooltip.SetHyperlink then
-		return nil
+	local ok = false
+	local scanSource = nil
+	if
+		type(unitToken) == "string"
+		and unitToken ~= ""
+		and self:IsNameplateUnitToken(unitToken)
+		and scanTooltip.SetUnit
+	then
+		ok = pcall(scanTooltip.SetUnit, scanTooltip, unitToken)
+		scanSource = "unit"
 	end
-
-	local ok = pcall(scanTooltip.SetHyperlink, scanTooltip, "unit:" .. unitGuid)
+	if (not ok) and type(unitGuid) == "string" and unitGuid ~= "" and scanTooltip.SetHyperlink then
+		ok = pcall(scanTooltip.SetHyperlink, scanTooltip, "unit:" .. unitGuid)
+		scanSource = "hyperlink"
+	end
 	if not ok then
 		if scanTooltip.Hide then
 			pcall(scanTooltip.Hide, scanTooltip)
@@ -2050,6 +2262,9 @@ function QuestTogether:TryEvaluateQuestObjectiveViaTooltip(unitToken, unitFrame,
 		return false, false, nil
 	end
 	if not IsNonEmptyString(unitGuid) then
+		unitGuid = nil
+	end
+	if not unitGuid and not self:IsNameplateUnitToken(unitToken) then
 		return false, false, nil
 	end
 	if self.IsWorkBlocked and self:IsWorkBlocked("nameplate_tooltip_resolve") then
@@ -2067,25 +2282,6 @@ function QuestTogether:TryEvaluateQuestObjectiveViaTooltip(unitToken, unitFrame,
 
 		resolvedAnyTooltipLines = true
 		local isQuestObjective = self:EvaluateTooltipQuestObjectiveLines(tooltipLines)
-		if self.IsActiveDelveScenario and self:IsActiveDelveScenario() then
-			local sampleTexts = {}
-			for index = 1, math.min(#tooltipLines, 3) do
-				local lineData = tooltipLines[index]
-				sampleTexts[#sampleTexts + 1] = SafeTrimText(GetTooltipQuestLinePrimaryText(lineData))
-			end
-						PrintOneShotDelveDebug(
-							self,
-							"debugDelveTooltipEval" .. tostring(sourceName or resolvedSourceIndex or nextSourceIndex),
-							string.format(
-							"tooltip_eval source=%s unit=%s guid=%s objective=%s lines=%s",
-							SafeText(sourceName, "<nil>"),
-							SafeText(unitToken, "<nil>"),
-							SafeText(unitGuid, "<nil>"),
-						tostring(isQuestObjective),
-						table.concat(sampleTexts, "|")
-				)
-			)
-		end
 		if isQuestObjective then
 			return true, true, unitGuid
 		end
@@ -2096,18 +2292,6 @@ function QuestTogether:TryEvaluateQuestObjectiveViaTooltip(unitToken, unitFrame,
 	end
 
 	if not resolvedAnyTooltipLines then
-		if self.IsActiveDelveScenario and self:IsActiveDelveScenario() then
-					PrintOneShotDelveDebug(
-						self,
-						"debugDelveTooltipEmpty",
-						string.format(
-							"tooltip_empty unit=%s guid=%s titleCacheDelves=%s",
-							SafeText(unitToken, "<nil>"),
-							SafeText(unitGuid, "<nil>"),
-							tostring(self.delveObjectiveTitleCache and self.delveObjectiveTitleCache["Delves"] == true)
-					)
-				)
-		end
 		return false, false, unitGuid
 	end
 
@@ -2144,26 +2328,53 @@ function QuestTogether:TryResolveNameplateQuestObjectiveState(unitToken, unitFra
 	end
 
 	local unitGuid = self:GetNameplateTooltipScanGuid(unitToken, unitFrame)
-	if self:IsSecretValue(unitGuid) or not IsNonEmptyString(unitGuid) then
+	if self:IsSecretValue(unitGuid) then
+		unitGuid = nil
+	end
+	if not IsNonEmptyString(unitGuid) then
+		unitGuid = nil
+	end
+	if not unitGuid and not allowLiveScan then
 		return false, false, nil
 	end
 
-	local hasCachedQuestState, cachedQuestState = self:TryGetReusableCachedNameplateQuestState(unitToken, unitGuid)
-	if hasCachedQuestState then
-		return true, cachedQuestState, unitGuid
+	if unitGuid then
+		local hasCachedQuestState, cachedQuestState = self:TryGetReusableCachedNameplateQuestState(unitToken, unitGuid)
+		if hasCachedQuestState then
+			return true, cachedQuestState, unitGuid
+		end
 	end
 
 	if not allowLiveScan then
 		return false, false, unitGuid
 	end
 
-	local hasResolvedQuestState, isQuestObjective = self:TryEvaluateQuestObjectiveViaTooltip(unitToken, unitFrame, unitGuid)
-	if not hasResolvedQuestState then
-		return false, false, unitGuid
+	local hasResolvedQuestState, isQuestObjective, resolvedUnitGuid =
+		self:TryEvaluateQuestObjectiveViaTooltip(unitToken, unitFrame, unitGuid)
+	if hasResolvedQuestState then
+		if IsNonEmptyString(resolvedUnitGuid or unitGuid) then
+			self:StoreResolvedNameplateQuestState(unitToken, resolvedUnitGuid or unitGuid, isQuestObjective)
+		end
+		return true, isQuestObjective, resolvedUnitGuid or unitGuid
 	end
 
-	self:StoreResolvedNameplateQuestState(unitToken, unitGuid, isQuestObjective)
-	return true, isQuestObjective, unitGuid
+	return false, false, resolvedUnitGuid or unitGuid
+end
+
+function QuestTogether:DoesNameplateUnitTokenMatchExpectedGuid(unitToken, expectedUnitGuid)
+	if not IsNonEmptyString(expectedUnitGuid) then
+		return true, nil
+	end
+	if not self:IsNameplateUnitToken(unitToken) then
+		return false, nil
+	end
+
+	local liveUnitGuid = self:GetNameplateUnitGuid(unitToken)
+	if self:IsSecretValue(liveUnitGuid) or not IsNonEmptyString(liveUnitGuid) then
+		return false, nil
+	end
+
+	return liveUnitGuid == expectedUnitGuid, liveUnitGuid
 end
 
 function QuestTogether:ResolveNameplateQuestStateForUnitToken(unitToken, unitGuid, reason)
@@ -2182,6 +2393,11 @@ function QuestTogether:ResolveNameplateQuestStateForUnitToken(unitToken, unitGui
 	local liveUnitToken = ResolveNameplateUnitToken(namePlateFrameBase, unitFrame)
 	if not self:IsNameplateUnitToken(liveUnitToken) then
 		liveUnitToken = unitToken
+	end
+	local tokenMatchesExpectedGuid, liveUnitGuid =
+		self:DoesNameplateUnitTokenMatchExpectedGuid(liveUnitToken, unitGuid)
+	if not tokenMatchesExpectedGuid then
+		return false
 	end
 
 	local hasResolvedQuestState, isQuestObjective, resolvedUnitGuid =
@@ -3311,20 +3527,13 @@ function QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 	if not hasResolvedQuestState then
 		self:ForgetResolvedNameplateQuestState(unitToken)
 		self:HideNameplateIcon(namePlateFrameBase)
-		if self.IsActiveDelveScenario and self:IsActiveDelveScenario() then
-					PrintOneShotDelveDebug(
-						self,
-						"debugDelveNameplateUnresolved",
-						string.format(
-							"plate_unresolved unit=%s guid=%s schedulingTooltip=true cacheDelves=%s",
-							SafeText(unitToken, "<nil>"),
-							SafeText(self:GetNameplateTooltipScanGuid(unitToken, unitFrame), "<nil>"),
-							tostring(self.delveObjectiveTitleCache and self.delveObjectiveTitleCache["Delves"] == true)
-					)
-			)
-		end
 		if self.ScheduleNameplateTooltipResolution then
-			self:ScheduleNameplateTooltipResolution(unitToken, self:GetNameplateTooltipScanGuid(unitToken, unitFrame), 0, "RefreshNameplateIcon")
+			self:ScheduleNameplateTooltipResolution(
+				unitToken,
+				self:GetNameplateTooltipScanGuid(unitToken, unitFrame),
+				0,
+				"RefreshNameplateIcon"
+			)
 		end
 		return
 	end

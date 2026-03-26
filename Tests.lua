@@ -64,24 +64,6 @@ local function CreateApiWithOverrides(overrides)
 		IsQuestOnMap = function()
 			return nil
 		end,
-		GetScenarioInfo = function()
-			return nil
-		end,
-		GetScenarioStepInfo = function()
-			return nil
-		end,
-		GetScenarioCriteriaInfo = function()
-			return nil
-		end,
-		HasActiveDelve = function()
-			return false
-		end,
-		GetAllWidgetsBySetID = function()
-			return nil
-		end,
-		GetScenarioHeaderDelvesWidgetVisualizationInfo = function()
-			return nil
-		end,
 		GetInstanceInfo = function()
 			return nil
 		end,
@@ -139,6 +121,7 @@ local function WithIsolatedState(testFn)
 	local originalNameplateScanTooltip = QuestTogether.nameplateScanTooltip
 	local originalAnnouncementBubbleScreenHostFrame = QuestTogether.announcementBubbleScreenHostFrame
 	local originalAnnouncementChannelLocalID = QuestTogether.announcementChannelLocalID
+	local originalCopyableWindow = QuestTogether.copyableWindow
 	local originalPendingPingRequests = QuestTogether.pendingPingRequests
 	local originalPendingQuestCompareRequests = QuestTogether.pendingQuestCompareRequests
 	local originalPendingQuestRemovals = QuestTogether.pendingQuestRemovals
@@ -188,9 +171,6 @@ local function WithIsolatedState(testFn)
 	if QuestTogether.ResetQuestSnapshotStateStore then
 		QuestTogether:ResetQuestSnapshotStateStore()
 	end
-	if QuestTogether.ResetDelveObjectiveStateStore then
-		QuestTogether:ResetDelveObjectiveStateStore()
-	end
 	if QuestTogether.ResetTaskAreaStateStore then
 		QuestTogether:ResetTaskAreaStateStore()
 	end
@@ -204,6 +184,7 @@ local function WithIsolatedState(testFn)
 	QuestTogether.nameplateScanTooltip = nil
 	QuestTogether.announcementBubbleScreenHostFrame = nil
 	QuestTogether.announcementChannelLocalID = nil
+	QuestTogether.copyableWindow = nil
 	QuestTogether.pendingPingRequests = {}
 	QuestTogether.pendingQuestCompareRequests = {}
 	QuestTogether.pendingQuestRemovals = {}
@@ -261,6 +242,7 @@ local function WithIsolatedState(testFn)
 	QuestTogether.nameplateScanTooltip = originalNameplateScanTooltip
 	QuestTogether.announcementBubbleScreenHostFrame = originalAnnouncementBubbleScreenHostFrame
 	QuestTogether.announcementChannelLocalID = originalAnnouncementChannelLocalID
+	QuestTogether.copyableWindow = originalCopyableWindow
 	QuestTogether.pendingPingRequests = originalPendingPingRequests
 	QuestTogether.pendingQuestCompareRequests = originalPendingQuestCompareRequests
 	QuestTogether.pendingQuestRemovals = originalPendingQuestRemovals
@@ -312,6 +294,7 @@ function QuestTogether:RunTests()
 
 	local originalSuppressLocalAnnouncementDisplayDuringTests = self.suppressLocalAnnouncementDisplayDuringTests
 	local originalIsRunningTests = self.isRunningTests
+	local preserveAllCategory = self.IsDebugWindowShowingAllCategory and self:IsDebugWindowShowingAllCategory() or false
 	self.suppressLocalAnnouncementDisplayDuringTests = true
 	self.isRunningTests = true
 	if self.BeginDebugLogBatchUpdate then
@@ -356,15 +339,15 @@ function QuestTogether:RunTests()
 	if self.EndDebugLogBatchUpdate then
 		self:EndDebugLogBatchUpdate()
 	end
-	if self.SetDebugLogCategoryFilter then
+	if self.SetDebugLogCategoryFilter and not preserveAllCategory then
 		self:SetDebugLogCategoryFilter("TEST")
 	end
 	if self.SetDebugLogSearchFilter then
 		self:SetDebugLogSearchFilter("")
 	end
-		if self.ShowDebugWindow then
-			self:ShowDebugWindow()
-		end
+	if self.ShowDebugWindow then
+		self:ShowDebugWindow()
+	end
 	return failed == 0
 end
 
@@ -478,6 +461,20 @@ QuestTogether:RegisterTest("debug window logs are runtime-only and reset on data
 
 		AssertEquals(QuestTogether.db.global.debugLogLines, nil)
 		AssertEquals(#QuestTogether:GetDebugLogStore(), 0)
+	end)
+end)
+
+QuestTogether:RegisterTest("debug window ALL category stays selected when already open during test runs", function()
+	WithIsolatedState(function()
+		QuestTogether.db.global.debugLogCategoryFilter = QuestTogether.DEBUG_ALL_CATEGORIES
+		QuestTogether.copyableWindow = {
+			copyableTitle = "QuestTogether Debug Window",
+			IsShown = function()
+				return true
+			end,
+		}
+
+		AssertTrue(QuestTogether:IsDebugWindowShowingAllCategory())
 	end)
 end)
 
@@ -1126,164 +1123,6 @@ QuestTogether:RegisterTest("world quest area refresh publishes enter and leave e
 AssertEquals(events[2].eventType, "WORLD_QUEST_LEFT")
 AssertEquals(events[2].questId, 12345)
 AssertTrue(string.find(events[2].text, "Snapshot World Quest", 1, true) ~= nil)
-end)
-
-QuestTogether:RegisterTest("delve objective snapshot rebuilds from scenario criteria without quest or map APIs", function()
-	QuestTogether.API = CreateApiWithOverrides({
-		HasActiveDelve = function()
-			return true
-		end,
-		GetScenarioInfo = function()
-			return {
-				scenarioID = 7001,
-				name = "Fungal Folly",
-			}
-		end,
-		GetScenarioStepInfo = function()
-			return {
-				stepID = 2,
-				title = "Delves",
-				numCriteria = 2,
-				widgetSetID = 0,
-			}
-		end,
-		GetScenarioCriteriaInfo = function(criteriaIndex)
-			if criteriaIndex == 1 then
-				return {
-					criteriaID = 90001,
-					description = "Fan Favorite defeated",
-					completed = false,
-					quantity = 5,
-					totalQuantity = 6,
-					quantityString = "5/6",
-				}
-			end
-			if criteriaIndex == 2 then
-				return {
-					criteriaID = 90002,
-					description = "Recover the Relic",
-					completed = true,
-					quantity = 1,
-					totalQuantity = 1,
-					quantityString = "1/1",
-				}
-			end
-			return nil
-		end,
-		GetNumQuestLogEntries = function()
-			error("quest log should not be read while rebuilding Delve objectives")
-		end,
-		GetTaskInfo = function()
-			error("task-area helpers should not be read while rebuilding Delve objectives")
-		end,
-	})
-
-	QuestTogether:RebuildDelveObjectiveStateStore()
-
-	local delveState = QuestTogether:GetDelveObjectiveStateStore()
-	AssertTrue(delveState.lastScenarioInfo.isDelve)
-	AssertEquals(delveState.lastScenarioInfo.scenarioID, 7001)
-	AssertEquals(delveState.lastScenarioInfo.scenarioName, "Fungal Folly")
-	AssertEquals(delveState.lastScenarioInfo.stepTitle, "Delves")
-	AssertEquals(delveState.byCriteriaID[90001].description, "Fan Favorite defeated")
-	AssertEquals(delveState.byCriteriaID[90001].quantity, 5)
-	AssertEquals(delveState.byCriteriaID[90002].completed, true)
-	AssertTrue(delveState.titleCache["Fungal Folly"])
-	AssertTrue(delveState.titleCache["Delves"])
-end)
-
-QuestTogether:RegisterTest("delve objective refresh publishes diff-based announcements and refreshes nameplates", function()
-	local refreshCalls = 0
-	local published = {}
-	local pass = 0
-
-	QuestTogether.API = CreateApiWithOverrides({
-		HasActiveDelve = function()
-			return pass < 4
-		end,
-		GetScenarioInfo = function()
-			if pass >= 4 then
-				return nil
-			end
-			return {
-				scenarioID = 7101,
-				name = "Kriegval's Rest",
-			}
-		end,
-		GetScenarioStepInfo = function()
-			if pass >= 4 then
-				return nil
-			end
-			return {
-				stepID = 3,
-				title = "Delves",
-				numCriteria = 1,
-				widgetSetID = 0,
-			}
-		end,
-		GetScenarioCriteriaInfo = function(criteriaIndex)
-			AssertEquals(criteriaIndex, 1)
-			if pass >= 4 then
-				return nil
-			end
-			if pass == 1 then
-				return {
-					criteriaID = 91001,
-					description = "Fan Favorite defeated",
-					completed = false,
-					quantity = 0,
-					totalQuantity = 6,
-					quantityString = "0/6",
-				}
-			elseif pass == 2 then
-				return {
-					criteriaID = 91001,
-					description = "Fan Favorite defeated",
-					completed = false,
-					quantity = 3,
-					totalQuantity = 6,
-					quantityString = "3/6",
-				}
-			end
-			return {
-				criteriaID = 91001,
-				description = "Fan Favorite defeated",
-				completed = true,
-				quantity = 6,
-				totalQuantity = 6,
-				quantityString = "6/6",
-			}
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
-		published[#published + 1] = {
-			eventType = eventType,
-			text = text,
-			questId = questId,
-		}
-	end, function()
-		WithPatchedMethod(QuestTogether, "RefreshNameplatesForQuestStateChange", function()
-			refreshCalls = refreshCalls + 1
-		end, function()
-			pass = 1
-			QuestTogether:RefreshDelveObjectiveStates(true, "pass1")
-			pass = 2
-			QuestTogether:RefreshDelveObjectiveStates(true, "pass2")
-			pass = 3
-			QuestTogether:RefreshDelveObjectiveStates(true, "pass3")
-			pass = 4
-			QuestTogether:RefreshDelveObjectiveStates(true, "pass4")
-		end)
-	end)
-
-	AssertEquals(published[1].eventType, "DELVE_ENTERED")
-	AssertEquals(published[2].eventType, "DELVE_OBJECTIVE_ENTERED")
-	AssertEquals(published[3].eventType, "DELVE_OBJECTIVE_PROGRESS")
-	AssertEquals(published[4].eventType, "DELVE_OBJECTIVE_COMPLETED")
-	AssertEquals(published[5].eventType, "DELVE_LEFT")
-	AssertEquals(published[3].questId, 91001)
-	AssertEquals(refreshCalls, 4)
 end)
 
 QuestTogether:RegisterTest("super tracking changed defers task area refresh off the live event stack", function()
@@ -2233,6 +2072,66 @@ QuestTogether:RegisterTest("nameplate quest detection cache is keyed by guid and
 	end)
 end)
 
+QuestTogether:RegisterTest("deferred nameplate resolution ignores recycled tokens whose live guid no longer matches", function()
+	local namePlateFrameBase = {
+		namePlateUnitToken = "nameplate1",
+		UnitFrame = {},
+	}
+
+	QuestTogether.isEnabled = true
+
+	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+		return false
+	end, function()
+		WithPatchedMethod(QuestTogether, "GetAccessibleNameplateFrameForUnit", function(_, unitToken, requireShown)
+			AssertEquals(unitToken, "nameplate1")
+			AssertEquals(requireShown, true)
+			return namePlateFrameBase, namePlateFrameBase.UnitFrame
+		end, function()
+			WithPatchedMethod(QuestTogether, "GetNameplateUnitGuid", function(_, unitToken)
+				AssertEquals(unitToken, "nameplate1")
+				return "Player-0-0-0-0-99999-0000000000"
+			end, function()
+				WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function()
+					error("recycled token should be rejected before live resolution")
+				end, function()
+					WithPatchedMethod(QuestTogether, "HideNameplateIcon", function()
+						error("recycled token should not mutate the current frame")
+					end, function()
+						AssertFalse(
+							QuestTogether:ResolveNameplateQuestStateForUnitToken(
+								"nameplate1",
+								"Creature-0-0-0-0-12345-0000000000",
+								"test"
+							)
+						)
+					end)
+				end)
+			end)
+		end)
+	end)
+end)
+
+QuestTogether:RegisterTest("nameplate guid retry schedules a delayed visible refresh even before the unit token is queryable", function()
+	local scheduledReason = nil
+	local scheduledDelay = nil
+
+	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
+		return unitToken == "nameplate1"
+	end, function()
+		WithPatchedMethod(QuestTogether, "ScheduleNameplatePresentationRefresh", function(_, reason, delaySeconds)
+			scheduledReason = reason
+			scheduledDelay = delaySeconds
+		end, function()
+			AssertTrue(QuestTogether:MaybeScheduleNameplateTooltipGuidRetry("nameplate1", "RefreshNameplateIcon"))
+		end)
+	end)
+
+	AssertEquals(scheduledReason, "RefreshNameplateIcon")
+	AssertEquals(scheduledDelay, 0.2)
+	AssertEquals(QuestTogether.nameplateTooltipResolveRetryCountByUnitToken["nameplate1"], 1)
+end)
+
 QuestTogether:RegisterTest("tooltip quest detection reuses cached results while map-sensitive runtime gate blocks rescanning", function()
 	local structuredScanCount = 0
 	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
@@ -2287,39 +2186,40 @@ QuestTogether:RegisterTest("tooltip quest detection rescans after an initial fal
 			WithPatchedMethod(QuestTogether, "GetNameplateTooltipScanGuid", function()
 				return "Creature-0-0-0-0-12345-0000000000"
 			end, function()
-				WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
-					return nil
-				end, function()
-					WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
-						structuredScanCount = structuredScanCount + 1
-						if structuredScanCount == 1 then
-							return nil
-						end
-							return {
-								{
-									leftText = "Tracking the Trail",
+					WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
+						return nil
+					end, function()
+						WithPatchedMethod(QuestTogether, "GetStructuredQuestObjectiveTooltipLines", function()
+							structuredScanCount = structuredScanCount + 1
+							if structuredScanCount <= 2 then
+								return nil
+							end
+								return {
+									{
+										leftText = "Tracking the Trail",
 								},
 								{
 									leftText = "- Subdue Creatures or Kill Players (40%)",
 								},
 							}
 						end, function()
-							WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function(_, unitGuid)
+							WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function(_, unitToken, unitGuid)
+								AssertEquals(unitToken, "nameplate1")
 								AssertEquals(unitGuid, "Creature-0-0-0-0-12345-0000000000")
 								hiddenScanCount = hiddenScanCount + 1
 								return nil
 							end, function()
 								AssertFalse(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
 								AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+								end)
 							end)
-						end)
+					end)
 				end)
 			end)
 		end)
-	end)
 
-	AssertEquals(structuredScanCount, 2)
-	AssertEquals(hiddenScanCount, 1)
+		AssertEquals(structuredScanCount, 3)
+		AssertEquals(hiddenScanCount, 1)
 end)
 
 QuestTogether:RegisterTest("quest objective detection uses tooltip parsing as the only decision path", function()
@@ -2396,7 +2296,56 @@ QuestTogether:RegisterTest("tooltip quest detection prefers frame guid over live
 			QuestTogether:GetNameplateTooltipScanGuid("nameplate1", unitFrame),
 			"Creature-0-0-0-0-12345-0000000000"
 		)
+			end)
+end)
+
+QuestTogether:RegisterTest("tooltip quest detection falls back to alternate unit-frame guid fields before UnitGUID lookup", function()
+	local unitFrame = {
+		unitGUID = "Creature-0-0-0-0-12345-0000000000",
+	}
+
+	WithPatchedMethod(QuestTogether, "GetNameplateUnitGuid", function()
+		error("should not fall back to UnitGUID when an alternate frame guid field is available")
+	end, function()
+		AssertEquals(
+			QuestTogether:GetNameplateTooltipScanGuid("nameplate1", unitFrame),
+			"Creature-0-0-0-0-12345-0000000000"
+		)
+	end)
+end)
+
+QuestTogether:RegisterTest("tooltip quest detection can resolve live scans without a guid when unit tooltip sources succeed", function()
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.isEnabled = true
+
+	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+		return false
+	end, function()
+		WithPatchedMethod(QuestTogether, "GetNameplateTooltipScanGuid", function()
+			return nil
+		end, function()
+			WithPatchedMethod(QuestTogether, "GetQuestObjectiveTooltipLines", function(_, unitToken, unitGuid)
+				AssertEquals(unitToken, "nameplate1")
+				AssertEquals(unitGuid, nil)
+				return {
+					{
+						leftText = "Tracking the Trail",
+					},
+					{
+						leftText = "1/8 Digested Object",
+					},
+				}, "structured_unit", 1
+			end, function()
+				local hasResolved, isQuestObjective, resolvedGuid =
+					QuestTogether:TryResolveNameplateQuestObjectiveState("nameplate1", {}, true)
+
+				AssertTrue(hasResolved)
+				AssertTrue(isQuestObjective)
+				AssertEquals(resolvedGuid, nil)
+				AssertEquals(QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"], nil)
+			end)
 		end)
+	end)
 end)
 
 QuestTogether:RegisterTest("hidden tooltip quest scan uses addon-owned helpers", function()
@@ -2406,6 +2355,7 @@ QuestTogether:RegisterTest("hidden tooltip quest scan uses addon-owned helpers",
 		clearCount = 0,
 		owner = nil,
 		anchor = nil,
+		unitToken = nil,
 		hyperlink = nil,
 		Hide = function(self)
 			self.hideCount = self.hideCount + 1
@@ -2416,6 +2366,9 @@ QuestTogether:RegisterTest("hidden tooltip quest scan uses addon-owned helpers",
 		SetOwner = function(self, owner, anchor)
 			self.owner = owner
 			self.anchor = anchor
+		end,
+		SetUnit = function(self, unitToken)
+			self.unitToken = unitToken
 		end,
 		SetHyperlink = function(self, hyperlink)
 			self.hyperlink = hyperlink
@@ -2436,27 +2389,33 @@ QuestTogether:RegisterTest("hidden tooltip quest scan uses addon-owned helpers",
 				AssertEquals(scanTooltip, fakeTooltip)
 				return 2
 			end, function()
-				WithPatchedMethod(QuestTogether, "GetNameplateScanTooltipLeftText", function(_, scanTooltip, lineIndex)
-					AssertEquals(scanTooltip, fakeTooltip)
-					if lineIndex == 1 then
-						return "Gnarlidin Trophies"
-					end
-					if lineIndex == 2 then
-						return "0/35 Gnarlidin Trophies"
-					end
-					return nil
+				WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
+					AssertEquals(unitToken, "nameplate1")
+					return true
 				end, function()
-					local tooltipLines = QuestTogether:GetQuestObjectiveTooltipLines("nameplate1", unitGuid)
-					AssertEquals(fakeTooltip.hyperlink, "unit:" .. unitGuid)
-					AssertEquals(fakeTooltip.anchor, "ANCHOR_NONE")
-					AssertEquals(type(tooltipLines), "table")
-					AssertEquals(#tooltipLines, 2)
-					AssertEquals(tooltipLines[1].type, nil)
-					AssertEquals(tooltipLines[1].leftText, "Gnarlidin Trophies")
-					AssertEquals(tooltipLines[2].type, nil)
-					AssertEquals(tooltipLines[2].leftText, "0/35 Gnarlidin Trophies")
-					AssertEquals(fakeTooltip.hideCount, 2)
-					AssertEquals(fakeTooltip.clearCount, 2)
+					WithPatchedMethod(QuestTogether, "GetNameplateScanTooltipLeftText", function(_, scanTooltip, lineIndex)
+						AssertEquals(scanTooltip, fakeTooltip)
+						if lineIndex == 1 then
+							return "Gnarlidin Trophies"
+						end
+						if lineIndex == 2 then
+							return "0/35 Gnarlidin Trophies"
+						end
+						return nil
+					end, function()
+						local tooltipLines = QuestTogether:GetQuestObjectiveTooltipLines("nameplate1", unitGuid)
+						AssertEquals(fakeTooltip.unitToken, "nameplate1")
+						AssertEquals(fakeTooltip.hyperlink, nil)
+						AssertEquals(fakeTooltip.anchor, "ANCHOR_NONE")
+						AssertEquals(type(tooltipLines), "table")
+						AssertEquals(#tooltipLines, 2)
+						AssertEquals(tooltipLines[1].type, nil)
+						AssertEquals(tooltipLines[1].leftText, "Gnarlidin Trophies")
+						AssertEquals(tooltipLines[2].type, nil)
+						AssertEquals(tooltipLines[2].leftText, "0/35 Gnarlidin Trophies")
+						AssertEquals(fakeTooltip.hideCount, 2)
+						AssertEquals(fakeTooltip.clearCount, 2)
+					end)
 				end)
 			end)
 		end)
@@ -2476,6 +2435,9 @@ QuestTogether:RegisterTest("structured-tooltip clients suppress Blizzard tooltip
 	})
 
 	QuestTogether.API = CreateApiWithOverrides({
+		IsWorldMapVisible = function()
+			return true
+		end,
 		GetTooltipDataForHyperlink = function(hyperlink)
 			AssertEquals(hyperlink, "unit:" .. unitGuid)
 			return {
@@ -2509,7 +2471,7 @@ QuestTogether:RegisterTest("structured-tooltip clients suppress Blizzard tooltip
 	end)
 end)
 
-QuestTogether:RegisterTest("structured tooltip suppression still falls back to hidden tooltip instead of unit payloads", function()
+QuestTogether:RegisterTest("structured tooltip suppression still falls back to hidden tooltip when both structured sources fail", function()
 	local unitGuid = "Creature-0-0-0-0-12345-0000000000"
 	local hiddenTooltipCalls = 0
 
@@ -2518,27 +2480,123 @@ QuestTogether:RegisterTest("structured tooltip suppression still falls back to h
 			AssertEquals(hyperlink, "unit:" .. unitGuid)
 			return nil
 		end,
-		GetTooltipDataForUnit = function()
-			error("unit tooltip fallback is not part of Plater's retail tooltip path")
+		GetTooltipDataForUnit = function(unitToken)
+			AssertEquals(unitToken, "nameplate1")
+			return nil
 		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function(_, candidateGuid)
-		AssertEquals(candidateGuid, unitGuid)
-		hiddenTooltipCalls = hiddenTooltipCalls + 1
-		return {
-			{
-				leftText = "0/35 Gnarlidin Trophies",
-			},
-		}
+	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
+		AssertEquals(unitToken, "nameplate1")
+		return true
 	end, function()
-		local tooltipLines = QuestTogether:GetQuestObjectiveTooltipLines("nameplate1", unitGuid)
-		AssertEquals(type(tooltipLines), "table")
-		AssertEquals(#tooltipLines, 1)
-		AssertEquals(tooltipLines[1].leftText, "0/35 Gnarlidin Trophies")
+		WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function(_, candidateUnitToken, candidateGuid)
+			AssertEquals(candidateUnitToken, "nameplate1")
+			AssertEquals(candidateGuid, unitGuid)
+			hiddenTooltipCalls = hiddenTooltipCalls + 1
+			return {
+				{
+					leftText = "0/35 Gnarlidin Trophies",
+				},
+			}
+		end, function()
+			local tooltipLines = QuestTogether:GetQuestObjectiveTooltipLines("nameplate1", unitGuid)
+			AssertEquals(type(tooltipLines), "table")
+			AssertEquals(#tooltipLines, 1)
+			AssertEquals(tooltipLines[1].leftText, "0/35 Gnarlidin Trophies")
+		end)
 	end)
 
 	AssertEquals(hiddenTooltipCalls, 1)
+end)
+
+QuestTogether:RegisterTest("structured-tooltip clients allow Blizzard tooltip scans when map is closed", function()
+	local unitGuid = "Creature-0-0-0-0-12345-0000000000"
+	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
+	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
+
+	QuestTogether.API = CreateApiWithOverrides({
+		IsWorldMapVisible = function()
+			return false
+		end,
+		GetTooltipDataForUnit = function(unitToken)
+			AssertEquals(unitToken, "nameplate1")
+			return {
+				lines = {
+					{
+						type = titleLineType,
+						leftText = "Tracking the Trail",
+					},
+					{
+						type = objectiveLineType,
+						leftText = "1/8 Digested Object",
+					},
+				},
+			}
+		end,
+		GetTooltipDataForHyperlink = function()
+			error("unit-token structured tooltip should win before hyperlink fallback")
+		end,
+	})
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+
+	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
+		AssertEquals(unitToken, "nameplate1")
+		return true
+	end, function()
+		WithPatchedMethod(QuestTogether, "GetQuestieQuestObjectiveTooltipLines", function()
+			return nil
+		end, function()
+			local tooltipLines = QuestTogether:GetStructuredQuestObjectiveTooltipLines("nameplate1", unitGuid, "unit")
+			AssertEquals(type(tooltipLines), "table")
+			AssertEquals(#tooltipLines, 2)
+			AssertEquals(tooltipLines[1].leftText, "Tracking the Trail")
+			AssertEquals(tooltipLines[2].leftText, "1/8 Digested Object")
+		end)
+	end)
+end)
+
+QuestTogether:RegisterTest("structured-tooltip clients fall back from unit payloads to hyperlink payloads", function()
+	local unitGuid = "Creature-0-0-0-0-12345-0000000000"
+	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
+	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
+
+	QuestTogether.API = CreateApiWithOverrides({
+		IsWorldMapVisible = function()
+			return false
+		end,
+		GetTooltipDataForUnit = function(unitToken)
+			AssertEquals(unitToken, "nameplate1")
+			return nil
+		end,
+		GetTooltipDataForHyperlink = function(hyperlink)
+			AssertEquals(hyperlink, "unit:" .. unitGuid)
+			return {
+				lines = {
+					{
+						type = titleLineType,
+						leftText = "Tracking the Trail",
+					},
+					{
+						type = objectiveLineType,
+						leftText = "1/8 Digested Object",
+					},
+				},
+			}
+		end,
+	})
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+
+	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
+		AssertEquals(unitToken, "nameplate1")
+		return true
+	end, function()
+		local tooltipLines = QuestTogether:GetQuestObjectiveTooltipLines("nameplate1", unitGuid)
+		AssertEquals(type(tooltipLines), "table")
+		AssertEquals(#tooltipLines, 2)
+		AssertEquals(tooltipLines[1].leftText, "Tracking the Trail")
+		AssertEquals(tooltipLines[2].leftText, "1/8 Digested Object")
+	end)
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection prefers Questie lines before Blizzard tooltip APIs", function()
@@ -2687,57 +2745,6 @@ QuestTogether:RegisterTest("nameplate quest title cache still rebuilds during co
 	AssertTrue(QuestTogether.nameplateQuestTitleCache["Combat Quest"])
 end)
 
-QuestTogether:RegisterTest("nameplate quest title cache includes active delve titles in delve instances", function()
-	QuestTogether.API = CreateApiWithOverrides({
-		IsInInstance = function()
-			return true
-		end,
-		HasActiveDelve = function()
-			return true
-		end,
-	})
-
-	local delveState = QuestTogether:GetDelveObjectiveStateStore()
-	delveState.titleCache["Delves"] = true
-	delveState.titleCache["Fungal Folly"] = true
-
-	QuestTogether:RebuildNameplateQuestTitleCache()
-
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["Delves"])
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["Fungal Folly"])
-end)
-
-QuestTogether:RegisterTest("nameplate quest title cache rebuild pulls Delve titles on demand for active Delves", function()
-	QuestTogether.API = CreateApiWithOverrides({
-		IsInInstance = function()
-			return true
-		end,
-		GetInstanceInfo = function()
-			return {
-				difficultyID = 208,
-			}
-		end,
-	})
-
-	local rebuildCalls = 0
-	local delveState = QuestTogether:GetDelveObjectiveStateStore()
-	wipe(delveState.titleCache)
-
-	WithPatchedMethod(QuestTogether, "RebuildDelveObjectiveStateStore", function(_)
-		rebuildCalls = rebuildCalls + 1
-		local state = QuestTogether:GetDelveObjectiveStateStore()
-		state.titleCache["Delves"] = true
-		state.titleCache["The Grudge Pit"] = true
-		return state
-	end, function()
-		QuestTogether:RebuildNameplateQuestTitleCache()
-	end)
-
-	AssertEquals(rebuildCalls, 1)
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["Delves"])
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["The Grudge Pit"])
-end)
-
 QuestTogether:RegisterTest("nameplate quest title cache stays empty in instances", function()
 	QuestTogether.nameplateQuestTitleCache["Stale Quest"] = true
 	QuestTogether.API = CreateApiWithOverrides({
@@ -2754,34 +2761,74 @@ QuestTogether:RegisterTest("nameplate quest title cache stays empty in instances
 	AssertEquals(QuestTogether.nameplateQuestTitleCache["Stale Quest"], nil)
 end)
 
-QuestTogether:RegisterTest("delves are allowed nameplate augmentation even in instance contexts", function()
-	QuestTogether.API = CreateApiWithOverrides({
-		IsInInstance = function()
-			return true
-		end,
-		GetInstanceInfo = function()
-			return {
-				difficultyID = 208,
-			}
-		end,
+QuestTogether:RegisterTest("structured tooltip extraction surfaces args text when leftText is missing", function()
+	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
+	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+
+	local tooltipLines = QuestTogether:ExtractQuestObjectiveTooltipLinesFromTooltipData({
+		lines = {
+			{
+				type = titleLineType,
+				args = {
+					{
+						field = "leftText",
+						stringVal = "Tracking the Trail",
+					},
+				},
+			},
+			{
+				type = objectiveLineType,
+				args = {
+					{
+						field = "leftText",
+						stringVal = "1/8 Digested Object",
+					},
+				},
+			},
+		},
 	})
 
-	AssertFalse(QuestTogether:IsNameplateAugmentationBlockedInCurrentContext())
+	AssertEquals(type(tooltipLines), "table")
+	AssertEquals(#tooltipLines, 2)
+	AssertEquals(tooltipLines[1].leftText, "Tracking the Trail")
+	AssertEquals(tooltipLines[2].leftText, "1/8 Digested Object")
+	AssertTrue(QuestTogether:EvaluateTooltipQuestObjectiveLines(tooltipLines))
 end)
 
-QuestTogether:RegisterTest("tooltip quest detection accepts active delve titles as objective titles", function()
-	QuestTogether.delveObjectiveTitleCache["Delves"] = true
+QuestTogether:RegisterTest("structured tooltip extraction surfaces tooltip args through the API helper", function()
+	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
+	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
+	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
 
-	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
-		{
-			leftText = "Delves",
+	local tooltipData = {
+		lines = {
+			{
+				type = titleLineType,
+				args = {},
+			},
+			{
+				type = objectiveLineType,
+				args = {},
+			},
 		},
-		{
-			leftText = "Fan Favorite defeated: 5/6",
-		},
+	}
+	QuestTogether.API = CreateApiWithOverrides({
+		SurfaceTooltipDataArgs = function(candidateTooltipData)
+			AssertEquals(candidateTooltipData, tooltipData)
+			candidateTooltipData.lines[1].leftText = "Tracking the Trail"
+			candidateTooltipData.lines[2].leftText = "1/8 Digested Object"
+			return candidateTooltipData
+		end,
 	})
 
-	AssertTrue(hasObjective)
+	local tooltipLines = QuestTogether:ExtractQuestObjectiveTooltipLinesFromTooltipData(tooltipData)
+
+	AssertEquals(type(tooltipLines), "table")
+	AssertEquals(#tooltipLines, 2)
+	AssertEquals(tooltipLines[1].leftText, "Tracking the Trail")
+	AssertEquals(tooltipLines[2].leftText, "1/8 Digested Object")
+	AssertTrue(QuestTogether:EvaluateTooltipQuestObjectiveLines(tooltipLines))
 end)
 
 QuestTogether:RegisterTest("announcement bubble refresh uses addon-owned side-table state", function()

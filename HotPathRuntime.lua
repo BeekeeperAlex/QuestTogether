@@ -18,7 +18,6 @@ QuestTogether.runtimeWorkDelayByClass = QuestTogether.runtimeWorkDelayByClass or
 	quest_log_drain = 0,
 	task_area_refresh = 0.1,
 	quest_snapshot_refresh = 1,
-	delve_objective_refresh = 0.1,
 	nameplate_quest_refresh = 0,
 	nameplate_refresh = 0,
 	nameplate_tint_refresh = 0.05,
@@ -116,10 +115,6 @@ function QuestTogether:IsWorkBlocked(workClass)
 			return true
 		end
 		return self:IsRuntimeRestricted()
-	end
-
-	if workClass == "delve_objective_refresh" then
-		return false
 	end
 
 	if workClass == "nameplate_quest_refresh" or workClass == "nameplate_refresh" or workClass == "nameplate_tint_refresh" then
@@ -261,20 +256,6 @@ function QuestTogether:ScheduleQuestStateRefreshWork(reason, delaySeconds)
 			self:RefreshNameplatesForQuestStateChange(reason)
 		end
 	end, delaySeconds, reason or "quest_snapshot_refresh")
-end
-
-function QuestTogether:ScheduleDelveObjectiveRefreshWork(shouldAnnounce, delaySeconds, reason)
-	if shouldAnnounce then
-		self:SetRuntimeFlag("pendingDelveObjectiveRefreshShouldAnnounce", true)
-	end
-
-	return self:ScheduleDeferredWork("delve_objective_refresh", "delve_objective_refresh", function()
-		local announce = self:GetRuntimeFlag("pendingDelveObjectiveRefreshShouldAnnounce", false) and true or false
-		self:SetRuntimeFlag("pendingDelveObjectiveRefreshShouldAnnounce", false)
-		if self.RefreshDelveObjectiveStates then
-			self:RefreshDelveObjectiveStates(announce, reason or "delve_objective_refresh")
-		end
-	end, delaySeconds, reason or "delve_objective_refresh")
 end
 
 function QuestTogether:ScheduleNameplatePresentationRefresh(reason, delaySeconds)
