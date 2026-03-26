@@ -13,13 +13,6 @@ function QuestTogether:RegisterTest(name, fn)
 	}
 end
 
-local function BuildTestLogMessage(message)
-	local body = tostring(message or "")
-	body = body:gsub("^%[PASS%]", "|cff33ff99[PASS]|r")
-	body = body:gsub("^%[FAIL%]", "|cffff3333[FAIL]|r")
-	return "Debug: " .. body
-end
-
 local function AssertTrue(value, message)
 	if not value then
 		error(message or "Expected true but got false/nil")
@@ -71,6 +64,27 @@ local function CreateApiWithOverrides(overrides)
 		IsQuestOnMap = function()
 			return nil
 		end,
+		GetScenarioInfo = function()
+			return nil
+		end,
+		GetScenarioStepInfo = function()
+			return nil
+		end,
+		GetScenarioCriteriaInfo = function()
+			return nil
+		end,
+		HasActiveDelve = function()
+			return false
+		end,
+		GetAllWidgetsBySetID = function()
+			return nil
+		end,
+		GetScenarioHeaderDelvesWidgetVisualizationInfo = function()
+			return nil
+		end,
+		GetInstanceInfo = function()
+			return nil
+		end,
 	}
 	for key, value in pairs(safeTaskAreaDefaults) do
 		merged[key] = value
@@ -105,6 +119,7 @@ local function WithIsolatedState(testFn)
 	local originalProfileKeys = QuestTogether:DeepCopy(QuestTogether.db.profileKeys or {})
 	local originalActiveProfileKey = QuestTogether.activeProfileKey
 	local originalActiveCharacterKey = QuestTogether.activeCharacterKey
+	local originalSavedVariables = _G.QuestTogetherDB
 	local originalAPI = QuestTogether.API
 	local originalPrint = QuestTogether.Print
 	local originalPrintRaw = QuestTogether.PrintRaw
@@ -112,6 +127,11 @@ local function WithIsolatedState(testFn)
 	local originalPartyMembers = QuestTogether.partyMembers
 	local originalPartyMemberOrder = QuestTogether.partyMemberOrder
 	local originalPartyRosterFingerprint = QuestTogether.partyRosterFingerprint
+	local originalDebugLogLines = QuestTogether.debugLogLines
+	local originalDebugLogTextLengthSum = QuestTogether.debugLogTextLengthSum
+	local originalDebugLogStoreNormalized = QuestTogether.debugLogStoreNormalized
+	local originalDebugLogRefreshBatchDepth = QuestTogether.debugLogRefreshBatchDepth
+	local originalDebugLogRefreshPending = QuestTogether.debugLogRefreshPending
 	local originalIsEnabled = QuestTogether.isEnabled
 	local originalProfileEnabled = QuestTogether.db.profile.enabled
 	local originalRuntimeStateStore = QuestTogether.runtimeStateStore
@@ -150,9 +170,14 @@ local function WithIsolatedState(testFn)
 	}
 	QuestTogether.activeCharacterKey = "MyPlayer-Realm"
 	QuestTogether.activeProfileKey = "MyPlayer-Realm"
-	QuestTogether.db.profile.debugMode = false
+	_G.QuestTogetherDB = QuestTogether.db
 	QuestTogether.db.profile.enabled = false
 	QuestTogether.isEnabled = false
+	QuestTogether.debugLogLines = {}
+	QuestTogether.debugLogTextLengthSum = 0
+	QuestTogether.debugLogStoreNormalized = true
+	QuestTogether.debugLogRefreshBatchDepth = 0
+	QuestTogether.debugLogRefreshPending = false
 	QuestTogether.partyMembers = {}
 	QuestTogether.partyMemberOrder = {}
 	QuestTogether.partyRosterFingerprint = ""
@@ -162,6 +187,9 @@ local function WithIsolatedState(testFn)
 	end
 	if QuestTogether.ResetQuestSnapshotStateStore then
 		QuestTogether:ResetQuestSnapshotStateStore()
+	end
+	if QuestTogether.ResetDelveObjectiveStateStore then
+		QuestTogether:ResetDelveObjectiveStateStore()
 	end
 	if QuestTogether.ResetTaskAreaStateStore then
 		QuestTogether:ResetTaskAreaStateStore()
@@ -199,6 +227,7 @@ local function WithIsolatedState(testFn)
 	QuestTogether.db.profileKeys = originalProfileKeys
 	QuestTogether.activeProfileKey = originalActiveProfileKey
 	QuestTogether.activeCharacterKey = originalActiveCharacterKey
+	_G.QuestTogetherDB = originalSavedVariables
 	if
 		originalActiveProfileKey
 		and QuestTogether.db.profiles
@@ -212,6 +241,11 @@ local function WithIsolatedState(testFn)
 	QuestTogether.Print = originalPrint
 	QuestTogether.PrintRaw = originalPrintRaw
 	QuestTogether.PrintChatLogRaw = originalPrintChatLogRaw
+	QuestTogether.debugLogLines = originalDebugLogLines
+	QuestTogether.debugLogTextLengthSum = originalDebugLogTextLengthSum
+	QuestTogether.debugLogStoreNormalized = originalDebugLogStoreNormalized
+	QuestTogether.debugLogRefreshBatchDepth = originalDebugLogRefreshBatchDepth
+	QuestTogether.debugLogRefreshPending = originalDebugLogRefreshPending
 	QuestTogether.partyMembers = originalPartyMembers
 	QuestTogether.partyMemberOrder = originalPartyMemberOrder
 	QuestTogether.partyRosterFingerprint = originalPartyRosterFingerprint
@@ -274,12 +308,24 @@ function QuestTogether:RunTests()
 	local resultLines = {
 		"QuestTogether in-game test results",
 		"Total tests: " .. tostring(total),
-		"",
 	}
 
-	self:PrintChatLogSystemMessage(BuildTestLogMessage("Running " .. tostring(total) .. " in-game tests..."))
 	local originalSuppressLocalAnnouncementDisplayDuringTests = self.suppressLocalAnnouncementDisplayDuringTests
+	local originalIsRunningTests = self.isRunningTests
 	self.suppressLocalAnnouncementDisplayDuringTests = true
+	self.isRunningTests = true
+	if self.BeginDebugLogBatchUpdate then
+		self:BeginDebugLogBatchUpdate()
+	end
+	if self.RemoveDebugLogEntriesByCategory then
+		self:RemoveDebugLogEntriesByCategory("test")
+	end
+
+	if self.LogDebugLine then
+		self:LogDebugLine("Running " .. tostring(total) .. " in-game tests...", {
+			category = "test",
+		})
+	end
 
 	for _, testCase in ipairs(self.tests) do
 		local ok, err = pcall(function()
@@ -294,19 +340,31 @@ function QuestTogether:RunTests()
 		end
 	end
 
-	resultLines[#resultLines + 1] = ""
 	resultLines[#resultLines + 1] =
 		"Test summary: " .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed."
 
-	if self.SetTestResultLogLines then
-		self:SetTestResultLogLines(resultLines)
-	end
-	if self.ShowTestResultsWindow then
-		self:ShowTestResultsWindow()
+	if self.LogDebugLine then
+		for index = 1, #resultLines do
+			self:LogDebugLine(resultLines[index], {
+				category = "test",
+			})
+		end
 	end
 
 	self.suppressLocalAnnouncementDisplayDuringTests = originalSuppressLocalAnnouncementDisplayDuringTests
-	self:PrintChatLogSystemMessage(BuildTestLogMessage("Test summary: " .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed."))
+	self.isRunningTests = originalIsRunningTests
+	if self.EndDebugLogBatchUpdate then
+		self:EndDebugLogBatchUpdate()
+	end
+	if self.SetDebugLogCategoryFilter then
+		self:SetDebugLogCategoryFilter("TEST")
+	end
+	if self.SetDebugLogSearchFilter then
+		self:SetDebugLogSearchFilter("")
+	end
+		if self.ShowDebugWindow then
+			self:ShowDebugWindow()
+		end
 	return failed == 0
 end
 
@@ -345,6 +403,82 @@ QuestTogether:RegisterTest("NormalizeQuestID coerces and validates quest ids", f
 	AssertEquals(QuestTogether:NormalizeQuestID(0), nil)
 	AssertEquals(QuestTogether:NormalizeQuestID(-3), nil)
 	AssertEquals(QuestTogether:NormalizeQuestID("abc"), nil)
+end)
+
+QuestTogether:RegisterTest("debug window category filter and search support fuzzy and quoted exact matches", function()
+	WithIsolatedState(function()
+		QuestTogether:ClearDebugLog()
+		QuestTogether:LogDebugLine("alpha one", {
+			category = "quest",
+		})
+		QuestTogether:LogDebugLine("beta two", {
+			category = "test",
+		})
+		QuestTogether:LogDebugLine("alpha three", {
+			category = "quest",
+		})
+
+		local fuzzyText = QuestTogether:GetDebugLogText("QUEST", "ath")
+		AssertFalse(string.find(fuzzyText, "alpha one", 1, true) ~= nil)
+		AssertTrue(string.find(fuzzyText, "alpha three", 1, true) ~= nil)
+		AssertFalse(string.find(fuzzyText, "beta two", 1, true) ~= nil)
+
+		local exactText = QuestTogether:GetDebugLogText("QUEST", "\"alpha t\"")
+		AssertFalse(string.find(exactText, "alpha one", 1, true) ~= nil)
+		AssertTrue(string.find(exactText, "alpha three", 1, true) ~= nil)
+		AssertFalse(string.find(exactText, "beta two", 1, true) ~= nil)
+
+		local shownCount, _, totalCount = QuestTogether:GetDebugLogMetrics("QUEST", "\"alpha\"")
+		AssertEquals(shownCount, 2)
+		AssertEquals(totalCount, 3)
+
+		QuestTogether:SetDebugLogCategoryFilter("quest")
+		AssertEquals(QuestTogether:GetDebugLogCategoryFilter(), "QUEST")
+		QuestTogether:SetDebugLogSearchFilter("\"alpha t\"")
+		AssertEquals(QuestTogether:GetDebugLogSearchFilter(), "\"alpha t\"")
+	end)
+end)
+
+QuestTogether:RegisterTest("debug window clear resets filters and stale categories fall back to ALL", function()
+	WithIsolatedState(function()
+		QuestTogether:ClearDebugLog()
+		QuestTogether:LogDebugLine("alpha quest", {
+			category = "quest",
+		})
+		QuestTogether:LogDebugLine("beta test", {
+			category = "test",
+		})
+
+		QuestTogether:SetDebugLogCategoryFilter("test")
+		AssertEquals(QuestTogether:GetDebugLogCategoryFilter(), "TEST")
+		QuestTogether:RemoveDebugLogEntriesByCategory("test")
+		AssertEquals(QuestTogether:GetDebugLogCategoryFilter(), "ALL")
+
+		QuestTogether:SetDebugLogCategoryFilter("quest")
+		QuestTogether:SetDebugLogSearchFilter("alpha")
+		QuestTogether:ClearDebugWindow()
+		AssertEquals(QuestTogether:GetDebugLogCategoryFilter(), "ALL")
+		AssertEquals(QuestTogether:GetDebugLogSearchFilter(), "")
+		AssertEquals(#QuestTogether:GetDebugLogStore(), 0)
+	end)
+end)
+
+QuestTogether:RegisterTest("debug window logs are runtime-only and reset on database init", function()
+	WithIsolatedState(function()
+		QuestTogether.db.global.debugLogLines = {
+			{
+				text = "persisted line",
+				category = "test",
+			},
+		}
+		QuestTogether.debugLogLines = QuestTogether.db.global.debugLogLines
+		QuestTogether.debugLogStoreNormalized = false
+
+		QuestTogether:InitializeDatabase()
+
+		AssertEquals(QuestTogether.db.global.debugLogLines, nil)
+		AssertEquals(#QuestTogether:GetDebugLogStore(), 0)
+	end)
 end)
 
 QuestTogether:RegisterTest("WatchQuest stores tracker entries under normalized numeric quest ids", function()
@@ -989,9 +1123,167 @@ QuestTogether:RegisterTest("world quest area refresh publishes enter and leave e
 	AssertEquals(events[1].eventType, "WORLD_QUEST_ENTERED")
 	AssertEquals(events[1].questId, 12345)
 	AssertTrue(string.find(events[1].text, "Snapshot World Quest", 1, true) ~= nil)
-	AssertEquals(events[2].eventType, "WORLD_QUEST_LEFT")
-	AssertEquals(events[2].questId, 12345)
-	AssertTrue(string.find(events[2].text, "Snapshot World Quest", 1, true) ~= nil)
+AssertEquals(events[2].eventType, "WORLD_QUEST_LEFT")
+AssertEquals(events[2].questId, 12345)
+AssertTrue(string.find(events[2].text, "Snapshot World Quest", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("delve objective snapshot rebuilds from scenario criteria without quest or map APIs", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		HasActiveDelve = function()
+			return true
+		end,
+		GetScenarioInfo = function()
+			return {
+				scenarioID = 7001,
+				name = "Fungal Folly",
+			}
+		end,
+		GetScenarioStepInfo = function()
+			return {
+				stepID = 2,
+				title = "Delves",
+				numCriteria = 2,
+				widgetSetID = 0,
+			}
+		end,
+		GetScenarioCriteriaInfo = function(criteriaIndex)
+			if criteriaIndex == 1 then
+				return {
+					criteriaID = 90001,
+					description = "Fan Favorite defeated",
+					completed = false,
+					quantity = 5,
+					totalQuantity = 6,
+					quantityString = "5/6",
+				}
+			end
+			if criteriaIndex == 2 then
+				return {
+					criteriaID = 90002,
+					description = "Recover the Relic",
+					completed = true,
+					quantity = 1,
+					totalQuantity = 1,
+					quantityString = "1/1",
+				}
+			end
+			return nil
+		end,
+		GetNumQuestLogEntries = function()
+			error("quest log should not be read while rebuilding Delve objectives")
+		end,
+		GetTaskInfo = function()
+			error("task-area helpers should not be read while rebuilding Delve objectives")
+		end,
+	})
+
+	QuestTogether:RebuildDelveObjectiveStateStore()
+
+	local delveState = QuestTogether:GetDelveObjectiveStateStore()
+	AssertTrue(delveState.lastScenarioInfo.isDelve)
+	AssertEquals(delveState.lastScenarioInfo.scenarioID, 7001)
+	AssertEquals(delveState.lastScenarioInfo.scenarioName, "Fungal Folly")
+	AssertEquals(delveState.lastScenarioInfo.stepTitle, "Delves")
+	AssertEquals(delveState.byCriteriaID[90001].description, "Fan Favorite defeated")
+	AssertEquals(delveState.byCriteriaID[90001].quantity, 5)
+	AssertEquals(delveState.byCriteriaID[90002].completed, true)
+	AssertTrue(delveState.titleCache["Fungal Folly"])
+	AssertTrue(delveState.titleCache["Delves"])
+end)
+
+QuestTogether:RegisterTest("delve objective refresh publishes diff-based announcements and refreshes nameplates", function()
+	local refreshCalls = 0
+	local published = {}
+	local pass = 0
+
+	QuestTogether.API = CreateApiWithOverrides({
+		HasActiveDelve = function()
+			return pass < 4
+		end,
+		GetScenarioInfo = function()
+			if pass >= 4 then
+				return nil
+			end
+			return {
+				scenarioID = 7101,
+				name = "Kriegval's Rest",
+			}
+		end,
+		GetScenarioStepInfo = function()
+			if pass >= 4 then
+				return nil
+			end
+			return {
+				stepID = 3,
+				title = "Delves",
+				numCriteria = 1,
+				widgetSetID = 0,
+			}
+		end,
+		GetScenarioCriteriaInfo = function(criteriaIndex)
+			AssertEquals(criteriaIndex, 1)
+			if pass >= 4 then
+				return nil
+			end
+			if pass == 1 then
+				return {
+					criteriaID = 91001,
+					description = "Fan Favorite defeated",
+					completed = false,
+					quantity = 0,
+					totalQuantity = 6,
+					quantityString = "0/6",
+				}
+			elseif pass == 2 then
+				return {
+					criteriaID = 91001,
+					description = "Fan Favorite defeated",
+					completed = false,
+					quantity = 3,
+					totalQuantity = 6,
+					quantityString = "3/6",
+				}
+			end
+			return {
+				criteriaID = 91001,
+				description = "Fan Favorite defeated",
+				completed = true,
+				quantity = 6,
+				totalQuantity = 6,
+				quantityString = "6/6",
+			}
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		published[#published + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		WithPatchedMethod(QuestTogether, "RefreshNameplatesForQuestStateChange", function()
+			refreshCalls = refreshCalls + 1
+		end, function()
+			pass = 1
+			QuestTogether:RefreshDelveObjectiveStates(true, "pass1")
+			pass = 2
+			QuestTogether:RefreshDelveObjectiveStates(true, "pass2")
+			pass = 3
+			QuestTogether:RefreshDelveObjectiveStates(true, "pass3")
+			pass = 4
+			QuestTogether:RefreshDelveObjectiveStates(true, "pass4")
+		end)
+	end)
+
+	AssertEquals(published[1].eventType, "DELVE_ENTERED")
+	AssertEquals(published[2].eventType, "DELVE_OBJECTIVE_ENTERED")
+	AssertEquals(published[3].eventType, "DELVE_OBJECTIVE_PROGRESS")
+	AssertEquals(published[4].eventType, "DELVE_OBJECTIVE_COMPLETED")
+	AssertEquals(published[5].eventType, "DELVE_LEFT")
+	AssertEquals(published[3].questId, 91001)
+	AssertEquals(refreshCalls, 4)
 end)
 
 QuestTogether:RegisterTest("super tracking changed defers task area refresh off the live event stack", function()
@@ -1494,31 +1786,6 @@ QuestTogether:RegisterTest("chat bubble option validation rejects unknown values
 	end)
 end)
 
-QuestTogether:RegisterTest("legacy bubble settings migrate to numeric values", function()
-	QuestTogether.db.profile.chatBubbleSize = "small"
-	QuestTogether.db.profile.chatBubbleDuration = "4"
-	QuestTogether:NormalizeAnnouncementDisplayOptions()
-	AssertEquals(QuestTogether.db.profile.chatBubbleSize, 100)
-	AssertEquals(QuestTogether.db.profile.chatBubbleDuration, 4)
-
-	QuestTogether.db.profile.chatBubbleSize = "gigantic"
-	QuestTogether.db.profile.chatBubbleDuration = 99
-	QuestTogether:NormalizeAnnouncementDisplayOptions()
-	AssertEquals(QuestTogether.db.profile.chatBubbleSize, QuestTogether.DEFAULTS.profile.chatBubbleSize)
-	AssertEquals(QuestTogether.db.profile.chatBubbleDuration, QuestTogether.DEFAULTS.profile.chatBubbleDuration)
-end)
-
-QuestTogether:RegisterTest("legacy doEmotes setting migrates to split emote options", function()
-	QuestTogether.db.profile.doEmotes = false
-	QuestTogether.db.profile.emoteOnQuestCompletion = nil
-	QuestTogether.db.profile.emoteOnNearbyPlayerQuestCompletion = nil
-
-	QuestTogether:NormalizeAnnouncementDisplayOptions()
-
-	AssertFalse(QuestTogether.db.profile.emoteOnQuestCompletion)
-	AssertFalse(QuestTogether.db.profile.emoteOnNearbyPlayerQuestCompletion)
-end)
-
 QuestTogether:RegisterTest("progressbar objective text strips trailing parenthetical percent", function()
 	AssertEquals(
 		QuestTogether:StripTrailingParentheticalPercent("Fill the vial (34%)"),
@@ -1699,13 +1966,13 @@ QuestTogether:RegisterTest("tooltip quest detection recognizes fallback-style pr
 							{
 								leftText = "- Subdue Creatures or Kill Players (40%)",
 							},
-						}
-					end, function()
-						WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
-							error("legacy hidden tooltip fallback should not run on structured-tooltip clients")
+							}
 						end, function()
-							AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
-						end)
+							WithPatchedMethod(QuestTogether, "GetHiddenQuestObjectiveTooltipLines", function()
+								error("hidden tooltip fallback should not run when structured tooltip lines were returned")
+							end, function()
+								AssertTrue(QuestTogether:IsQuestObjectiveViaTooltip("nameplate1", {}))
+							end)
 					end)
 				end)
 			end)
@@ -2132,7 +2399,7 @@ QuestTogether:RegisterTest("tooltip quest detection prefers frame guid over live
 		end)
 end)
 
-QuestTogether:RegisterTest("legacy tooltip quest scan uses addon-owned hidden tooltip helpers", function()
+QuestTogether:RegisterTest("hidden tooltip quest scan uses addon-owned helpers", function()
 	local unitGuid = "Creature-0-0-0-0-12345-0000000000"
 	local fakeTooltip = {
 		hideCount = 0,
@@ -2314,12 +2581,12 @@ QuestTogether:RegisterTest("tooltip quest detection prefers Questie lines before
 	end)
 end)
 
-QuestTogether:RegisterTest("structured tooltip clients keep legacy hidden tooltip fallback enabled", function()
+QuestTogether:RegisterTest("structured tooltip clients keep the hidden tooltip fallback available", function()
 	QuestTogether.API = CreateApiWithOverrides()
 	AssertTrue(QuestTogether:IsNameplateTooltipScanEnabled())
 end)
 
-QuestTogether:RegisterTest("legacy hidden tooltip fallback stays enabled when structured tooltip APIs are unavailable", function()
+QuestTogether:RegisterTest("hidden tooltip fallback stays enabled when structured tooltip APIs are unavailable", function()
 	QuestTogether.API = CreateApiWithOverrides({
 		GetTooltipDataForHyperlink = false,
 		GetTooltipDataForUnit = false,
@@ -2420,6 +2687,57 @@ QuestTogether:RegisterTest("nameplate quest title cache still rebuilds during co
 	AssertTrue(QuestTogether.nameplateQuestTitleCache["Combat Quest"])
 end)
 
+QuestTogether:RegisterTest("nameplate quest title cache includes active delve titles in delve instances", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		HasActiveDelve = function()
+			return true
+		end,
+	})
+
+	local delveState = QuestTogether:GetDelveObjectiveStateStore()
+	delveState.titleCache["Delves"] = true
+	delveState.titleCache["Fungal Folly"] = true
+
+	QuestTogether:RebuildNameplateQuestTitleCache()
+
+	AssertTrue(QuestTogether.nameplateQuestTitleCache["Delves"])
+	AssertTrue(QuestTogether.nameplateQuestTitleCache["Fungal Folly"])
+end)
+
+QuestTogether:RegisterTest("nameplate quest title cache rebuild pulls Delve titles on demand for active Delves", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		GetInstanceInfo = function()
+			return {
+				difficultyID = 208,
+			}
+		end,
+	})
+
+	local rebuildCalls = 0
+	local delveState = QuestTogether:GetDelveObjectiveStateStore()
+	wipe(delveState.titleCache)
+
+	WithPatchedMethod(QuestTogether, "RebuildDelveObjectiveStateStore", function(_)
+		rebuildCalls = rebuildCalls + 1
+		local state = QuestTogether:GetDelveObjectiveStateStore()
+		state.titleCache["Delves"] = true
+		state.titleCache["The Grudge Pit"] = true
+		return state
+	end, function()
+		QuestTogether:RebuildNameplateQuestTitleCache()
+	end)
+
+	AssertEquals(rebuildCalls, 1)
+	AssertTrue(QuestTogether.nameplateQuestTitleCache["Delves"])
+	AssertTrue(QuestTogether.nameplateQuestTitleCache["The Grudge Pit"])
+end)
+
 QuestTogether:RegisterTest("nameplate quest title cache stays empty in instances", function()
 	QuestTogether.nameplateQuestTitleCache["Stale Quest"] = true
 	QuestTogether.API = CreateApiWithOverrides({
@@ -2434,6 +2752,36 @@ QuestTogether:RegisterTest("nameplate quest title cache stays empty in instances
 	QuestTogether:RebuildNameplateQuestTitleCache()
 
 	AssertEquals(QuestTogether.nameplateQuestTitleCache["Stale Quest"], nil)
+end)
+
+QuestTogether:RegisterTest("delves are allowed nameplate augmentation even in instance contexts", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		GetInstanceInfo = function()
+			return {
+				difficultyID = 208,
+			}
+		end,
+	})
+
+	AssertFalse(QuestTogether:IsNameplateAugmentationBlockedInCurrentContext())
+end)
+
+QuestTogether:RegisterTest("tooltip quest detection accepts active delve titles as objective titles", function()
+	QuestTogether.delveObjectiveTitleCache["Delves"] = true
+
+	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
+		{
+			leftText = "Delves",
+		},
+		{
+			leftText = "Fan Favorite defeated: 5/6",
+		},
+	})
+
+	AssertTrue(hasObjective)
 end)
 
 QuestTogether:RegisterTest("announcement bubble refresh uses addon-owned side-table state", function()

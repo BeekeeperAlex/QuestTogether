@@ -16,6 +16,9 @@ local function BindRuntimeReferenceAliases(self, state)
 	self.bonusObjectiveAreaStateByQuestID = state.taskArea.bonusByQuestID
 	self.questSnapshotByQuestID = state.questSnapshot.byQuestID
 	self.questSnapshotOrder = state.questSnapshot.order
+	self.delveObjectiveSnapshotByCriteriaID = state.delveObjectives.byCriteriaID
+	self.delveObjectiveOrder = state.delveObjectives.order
+	self.delveObjectiveTitleCache = state.delveObjectives.titleCache
 
 	self.nameplateQuestTitleCache = state.nameplate.titleCache
 	self.nameplateQuestStateByGuid = state.nameplate.questStateByGuid
@@ -28,6 +31,7 @@ local function BindRuntimeReferenceAliases(self, state)
 	self.nameplateRefreshPendingByUnitToken = state.nameplate.refreshPendingByUnitToken
 	self.nameplateRefreshGenerationByUnitToken = state.nameplate.refreshGenerationByUnitToken
 	self.nameplateHealthTintRefreshPendingByUnitToken = state.nameplate.healthTintRefreshPendingByUnitToken
+	self.nameplateTooltipResolveRetryCountByUnitToken = state.nameplate.tooltipResolveRetryCountByUnitToken
 
 	self.personalBubbleSliderHandlesByFrame = state.personalBubble.sliderHandlesByFrame
 	self.personalBubbleDialogPositionByFrame = state.personalBubble.dialogPositionByFrame
@@ -85,6 +89,29 @@ function QuestTogether:EnsureRuntimeStateStore()
 		state.questSnapshot.generation = 0
 	end
 
+	if type(state.delveObjectives) ~= "table" then
+		state.delveObjectives = {}
+	end
+	if type(state.delveObjectives.byCriteriaID) ~= "table" then
+		state.delveObjectives.byCriteriaID = type(self.delveObjectiveSnapshotByCriteriaID) == "table"
+			and self.delveObjectiveSnapshotByCriteriaID
+			or {}
+	end
+	if type(state.delveObjectives.order) ~= "table" then
+		state.delveObjectives.order = type(self.delveObjectiveOrder) == "table" and self.delveObjectiveOrder or {}
+	end
+	if type(state.delveObjectives.titleCache) ~= "table" then
+		state.delveObjectives.titleCache = type(self.delveObjectiveTitleCache) == "table"
+			and self.delveObjectiveTitleCache
+			or {}
+	end
+	if type(state.delveObjectives.generation) ~= "number" then
+		state.delveObjectives.generation = 0
+	end
+	if type(state.delveObjectives.lastScenarioInfo) ~= "table" then
+		state.delveObjectives.lastScenarioInfo = {}
+	end
+
 	if type(state.nameplate) ~= "table" then
 		state.nameplate = {}
 	end
@@ -124,6 +151,12 @@ function QuestTogether:EnsureRuntimeStateStore()
 				and self.nameplateHealthTintRefreshPendingByUnitToken
 				or {}
 	end
+	if type(state.nameplate.tooltipResolveRetryCountByUnitToken) ~= "table" then
+		state.nameplate.tooltipResolveRetryCountByUnitToken =
+			type(self.nameplateTooltipResolveRetryCountByUnitToken) == "table"
+				and self.nameplateTooltipResolveRetryCountByUnitToken
+				or {}
+	end
 	if type(state.nameplate.iconByUnitFrame) ~= "table" then
 		state.nameplate.iconByUnitFrame = EnsureWeakKeyTable(self.nameplateIconByUnitFrame)
 	end
@@ -155,6 +188,9 @@ function QuestTogether:EnsureRuntimeStateStore()
 	end
 	if state.runtime.pendingDeferredNameplateQuestStateRefresh ~= true then
 		state.runtime.pendingDeferredNameplateQuestStateRefresh = false
+	end
+	if state.runtime.pendingDelveObjectiveRefreshShouldAnnounce ~= true then
+		state.runtime.pendingDelveObjectiveRefreshShouldAnnounce = false
 	end
 	if type(state.runtime.deferredNameplateQuestStateRefreshGeneration) ~= "number" then
 		state.runtime.deferredNameplateQuestStateRefreshGeneration = 0
@@ -235,6 +271,36 @@ function QuestTogether:ResetQuestSnapshotStateStore()
 	return state
 end
 
+function QuestTogether:GetDelveObjectiveStateStore()
+	return self:EnsureRuntimeStateStore().delveObjectives
+end
+
+function QuestTogether:GetDelveObjectiveSnapshotByCriteriaID()
+	return self:GetDelveObjectiveStateStore().byCriteriaID
+end
+
+function QuestTogether:GetDelveObjectiveOrder()
+	return self:GetDelveObjectiveStateStore().order
+end
+
+function QuestTogether:GetDelveObjectiveTitleCache()
+	return self:GetDelveObjectiveStateStore().titleCache
+end
+
+function QuestTogether:GetDelveObjectiveScenarioInfo()
+	return self:GetDelveObjectiveStateStore().lastScenarioInfo
+end
+
+function QuestTogether:ResetDelveObjectiveStateStore()
+	local state = self:GetDelveObjectiveStateStore()
+	wipe(state.byCriteriaID)
+	wipe(state.order)
+	wipe(state.titleCache)
+	wipe(state.lastScenarioInfo)
+	state.generation = 0
+	return state
+end
+
 function QuestTogether:ResetTaskAreaStateStore()
 	local state = self:EnsureRuntimeStateStore()
 	wipe(state.taskArea.worldByQuestID)
@@ -259,6 +325,7 @@ function QuestTogether:ResetNameplateStateStore()
 	wipe(state.nameplate.refreshGenerationByUnitToken)
 	wipe(state.nameplate.refreshPendingByUnitToken)
 	wipe(state.nameplate.healthTintRefreshPendingByUnitToken)
+	wipe(state.nameplate.tooltipResolveRetryCountByUnitToken)
 	state.nameplate.iconByUnitFrame = NewWeakKeyTable()
 	state.nameplate.healthOverlayByUnitFrame = NewWeakKeyTable()
 	state.nameplate.bubbleByUnitFrame = NewWeakKeyTable()
@@ -309,6 +376,7 @@ function QuestTogether:ResetRuntimeWorkStateStore()
 	runtimeState.pendingWaypointIntent = nil
 	runtimeState.pendingScheduledTaskAreaRefreshShouldAnnounce = false
 	runtimeState.pendingDeferredNameplateQuestStateRefresh = false
+	runtimeState.pendingDelveObjectiveRefreshShouldAnnounce = false
 	runtimeState.deferredNameplateQuestStateRefreshGeneration = 0
 	runtimeState.nameplateFullRefreshGeneration = 0
 	runtimeState.deferredWorkState = {

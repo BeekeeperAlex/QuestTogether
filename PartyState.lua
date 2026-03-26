@@ -85,7 +85,6 @@ function QuestTogether:InitializePartyState()
 	self.partyMembers = self.partyMembers or {}
 	self.partyMemberOrder = self.partyMemberOrder or {}
 	self.partyRosterFingerprint = self.partyRosterFingerprint or ""
-	self:Debug("Initialized party state", "group")
 end
 
 local function AddUnitToRoster(addon, unitToken, membersByName, orderedNames)
@@ -134,8 +133,6 @@ function QuestTogether:RefreshPartyRoster()
 	self.partyMembers = membersByName
 	self.partyMemberOrder = orderedNames
 	self.partyRosterFingerprint = table.concat(orderedNames, "|")
-	self:DebugState("group", "partyMemberOrder", orderedNames)
-	self:Debugf("group", "Refreshed party roster fingerprint=%s", SafeText(self.partyRosterFingerprint, ""))
 end
 
 function QuestTogether:GetPartyRosterFingerprint()

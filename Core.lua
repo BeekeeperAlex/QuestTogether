@@ -23,6 +23,10 @@ local raw_string_match = string.match
 local raw_string_find = string.find
 local raw_issecretvalue = type(issecretvalue) == "function" and issecretvalue or nil
 
+local DEBUG_WINDOW_TITLE = "QuestTogether Debug Window"
+local DEBUG_WINDOW_HINT =
+	"Shared QuestTogether debug window. Use the category dropdown and Search field to filter. Quotes force exact phrase matches. Click Select All, then Ctrl+C."
+
 local function NormalizeQuestInfoFlagValue(rawValue)
 	if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
 		return nil
@@ -180,7 +184,16 @@ QuestTogether.activeProfileKey = QuestTogether.activeProfileKey or nil
 QuestTogether.activeCharacterKey = QuestTogether.activeCharacterKey or nil
 QuestTogether.pendingPingRequests = QuestTogether.pendingPingRequests or {}
 QuestTogether.pendingQuestCompareRequests = QuestTogether.pendingQuestCompareRequests or {}
-QuestTogether.testResultLogLines = QuestTogether.testResultLogLines or {}
+QuestTogether.debugLogLines = QuestTogether.debugLogLines or {}
+QuestTogether.debugLogTextLengthSum = QuestTogether.debugLogTextLengthSum or 0
+QuestTogether.debugLogStoreNormalized = QuestTogether.debugLogStoreNormalized or false
+QuestTogether.debugLogRefreshBatchDepth = QuestTogether.debugLogRefreshBatchDepth or 0
+QuestTogether.debugLogRefreshPending = QuestTogether.debugLogRefreshPending or false
+QuestTogether.isRunningTests = QuestTogether.isRunningTests or false
+QuestTogether.DEBUG_LOG_MAX_LINES = 400
+QuestTogether.DEBUG_LOG_MAX_CHARS = 200000
+QuestTogether.DEBUG_DEFAULT_CATEGORY = "DEBUG"
+QuestTogether.DEBUG_ALL_CATEGORIES = "ALL"
 
 -- Work queues / state tables used by event handlers.
 QuestTogether.onQuestLogUpdate = QuestTogether.onQuestLogUpdate or {}
@@ -215,7 +228,6 @@ QuestTogether.DEFAULTS = {
 			devLogAllAnnouncements = false,
 		chatBubbleSize = 100,
 		chatBubbleDuration = 3,
-		debugMode = false,
 		emoteOnQuestCompletion = true,
 		emoteOnNearbyPlayerQuestCompletion = true,
 		nameplateQuestIconEnabled = true,
@@ -229,13 +241,14 @@ QuestTogether.DEFAULTS = {
 		-- Stored per profile so each character/profile can pick its own chat tab.
 		questLogChatFrameID = nil,
 	},
-	global = {
-		questTrackers = {},
-		personalBubbleAnchors = {},
-		-- Legacy location kept for migration from older versions.
-		questLogChatFrameID = nil,
-	},
-}
+		global = {
+			questTrackers = {},
+			personalBubbleAnchors = {},
+			debugLogCategoryFilter = "ALL",
+			debugLogSearchFilter = "",
+			debugLogPrefixFilter = "",
+		},
+	}
 
 QuestTogether.nameplateQuestIconStyleLabels = {
 	left = "Left",
@@ -316,16 +329,6 @@ function QuestTogether:GetChatLogDestinationLabel(value)
 end
 
 function QuestTogether:NormalizeChatBubbleSizeValue(value)
-	local legacyValues = {
-		small = 100,
-		medium = 120,
-		large = 140,
-	}
-
-	if type(value) == "string" and legacyValues[value] then
-		value = legacyValues[value]
-	end
-
 	local numericValue = self:SafeToNumber(value)
 	if not numericValue then
 		return nil
@@ -551,6 +554,11 @@ QuestTogether.runtimeEvents = {
 	"QUEST_POI_UPDATE",
 	"AREA_POIS_UPDATED",
 	"PLAYER_INSIDE_QUEST_BLOB_STATE_CHANGED",
+	"SCENARIO_UPDATE",
+	"SCENARIO_CRITERIA_UPDATE",
+	"SCENARIO_COMPLETED",
+	"SCENARIO_BONUS_OBJECTIVE_COMPLETE",
+	"SCENARIO_CRITERIA_SHOW_STATE_UPDATE",
 	"ZONE_CHANGED",
 	"ZONE_CHANGED_INDOORS",
 	"ZONE_CHANGED_NEW_AREA",
@@ -598,23 +606,44 @@ QuestTogether.API = QuestTogether.API or {
 		end
 		return chatFrame
 	end,
-	GetCVar = function(cvarName)
-		if not (C_CVar and C_CVar.GetCVar and type(cvarName) == "string" and cvarName ~= "") then
-			return nil
-		end
+		GetCVar = function(cvarName)
+			if not (C_CVar and C_CVar.GetCVar and type(cvarName) == "string" and cvarName ~= "") then
+				return nil
+			end
 		local ok, value = pcall(C_CVar.GetCVar, cvarName)
 		if not ok then
 			return nil
 		end
 		if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(value) then
 			return nil
-		end
-		return value
-	end,
-	RemoveChatWindowChannel = function(chatFrame, channelName)
-		if QuestTogether and QuestTogether.CanAccessForeignFrame and not QuestTogether:CanAccessForeignFrame(chatFrame) then
-			return nil
-		end
+			end
+			return value
+		end,
+		GetInstanceInfo = function()
+			if type(GetInstanceInfo) ~= "function" then
+				return nil
+			end
+			local ok, name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, instanceMapID, instanceGroupSize =
+				pcall(GetInstanceInfo)
+			if not ok then
+				return nil
+			end
+			return {
+				name = name,
+				instanceType = instanceType,
+				difficultyID = difficultyID,
+				difficultyName = difficultyName,
+				maxPlayers = maxPlayers,
+				dynamicDifficulty = dynamicDifficulty,
+				isDynamic = isDynamic,
+				instanceMapID = instanceMapID,
+				instanceGroupSize = instanceGroupSize,
+			}
+		end,
+		RemoveChatWindowChannel = function(chatFrame, channelName)
+			if QuestTogether and QuestTogether.CanAccessForeignFrame and not QuestTogether:CanAccessForeignFrame(chatFrame) then
+				return nil
+			end
 		if chatFrame and chatFrame.RemoveChannel then
 			return chatFrame:RemoveChannel(channelName)
 		end
@@ -1296,6 +1325,108 @@ QuestTogether.API = QuestTogether.API or {
 				end
 			end
 			return titleInfo
+		end,
+		GetScenarioInfo = function()
+			if not (C_ScenarioInfo and C_ScenarioInfo.GetScenarioInfo) then
+				return nil
+			end
+			local ok, scenarioInfo = pcall(C_ScenarioInfo.GetScenarioInfo)
+			if not ok or type(scenarioInfo) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(scenarioInfo) then
+				return nil
+			end
+			return scenarioInfo
+		end,
+		GetScenarioStepInfo = function(stepID)
+			if not (C_ScenarioInfo and C_ScenarioInfo.GetScenarioStepInfo) then
+				return nil
+			end
+			local ok, stepInfo = pcall(C_ScenarioInfo.GetScenarioStepInfo, stepID)
+			if not ok or type(stepInfo) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(stepInfo) then
+				return nil
+			end
+			return stepInfo
+		end,
+		GetScenarioCriteriaInfo = function(criteriaIndex)
+			if not (C_ScenarioInfo and C_ScenarioInfo.GetCriteriaInfo) then
+				return nil
+			end
+			local numericCriteriaIndex = QuestTogether and QuestTogether.SafeToNumber
+				and QuestTogether:SafeToNumber(criteriaIndex)
+				or nil
+			if numericCriteriaIndex == nil then
+				return nil
+			end
+			numericCriteriaIndex = math.floor(numericCriteriaIndex + 0.5)
+			if numericCriteriaIndex <= 0 then
+				return nil
+			end
+			local ok, criteriaInfo = pcall(C_ScenarioInfo.GetCriteriaInfo, numericCriteriaIndex)
+			if not ok or type(criteriaInfo) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(criteriaInfo) then
+				return nil
+			end
+			return criteriaInfo
+		end,
+		HasActiveDelve = function()
+			if not (C_DelvesUI and C_DelvesUI.HasActiveDelve) then
+				return false
+			end
+			local ok, hasActiveDelve = pcall(C_DelvesUI.HasActiveDelve)
+			return ok and hasActiveDelve and true or false
+		end,
+		GetAllWidgetsBySetID = function(widgetSetID)
+			if not (C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID) then
+				return nil
+			end
+			local numericWidgetSetID = QuestTogether and QuestTogether.SafeToNumber
+				and QuestTogether:SafeToNumber(widgetSetID)
+				or nil
+			if numericWidgetSetID == nil then
+				return nil
+			end
+			numericWidgetSetID = math.floor(numericWidgetSetID + 0.5)
+			if numericWidgetSetID <= 0 then
+				return nil
+			end
+			local ok, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, numericWidgetSetID)
+			if not ok or type(widgets) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(widgets) then
+				return nil
+			end
+			return widgets
+		end,
+		GetScenarioHeaderDelvesWidgetVisualizationInfo = function(widgetID)
+			if not (C_UIWidgetManager and C_UIWidgetManager.GetScenarioHeaderDelvesWidgetVisualizationInfo) then
+				return nil
+			end
+			local numericWidgetID = QuestTogether and QuestTogether.SafeToNumber
+				and QuestTogether:SafeToNumber(widgetID)
+				or nil
+			if numericWidgetID == nil then
+				return nil
+			end
+			numericWidgetID = math.floor(numericWidgetID + 0.5)
+			if numericWidgetID <= 0 then
+				return nil
+			end
+			local ok, widgetInfo = pcall(C_UIWidgetManager.GetScenarioHeaderDelvesWidgetVisualizationInfo, numericWidgetID)
+			if not ok or type(widgetInfo) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(widgetInfo) then
+				return nil
+			end
+			return widgetInfo
 		end,
 		GetNumQuestLeaderBoards = function(questLogIndex)
 			if InCombatLockdown and InCombatLockdown() then
@@ -2169,10 +2300,6 @@ function QuestTogether:GetConfiguredQuestLogChatFrameID()
 	end
 
 	local configuredID = self:SafeToNumber(self.db.profile and self.db.profile.questLogChatFrameID)
-	if not configuredID and self.db.global then
-		-- Legacy fallback for migration from pre-profile versions.
-		configuredID = self:SafeToNumber(self.db.global.questLogChatFrameID)
-	end
 	if configuredID and configuredID > 0 then
 		return configuredID
 	end
@@ -2194,11 +2321,6 @@ function QuestTogether:SetConfiguredQuestLogChatFrameID(chatFrameID)
 		if self.db.profile then
 			self.db.profile.questLogChatFrameID = nil
 		end
-	end
-
-	-- Always clear legacy global storage so this stays profile-scoped.
-	if self.db.global then
-		self.db.global.questLogChatFrameID = nil
 	end
 
 	return true
@@ -2589,10 +2711,6 @@ function QuestTogether:PrintChatLogRaw(message)
 	end
 end
 
-function QuestTogether:IsDebugEnabled()
-	return self.db and self.db.profile and self.db.profile.debugMode == true
-end
-
 function QuestTogether:GetQuestIconChatTag(size)
 	local texturePath = self.NAMEPLATE_QUEST_ICON_TEXTURE
 	if type(texturePath) ~= "string" or texturePath == "" then
@@ -2758,11 +2876,12 @@ function QuestTogether:RebuildQuestSnapshotStore()
 				tostring(row.hasLocalPOI)
 			)
 		end
-		self:Print(
-			"QuestTogether debug: empty quest snapshot. totalEntries="
+		self:Debug(
+			"empty quest snapshot. totalEntries="
 				.. tostring(totalEntries)
 				.. " samples: "
-				.. table.concat(sampleParts, " | ")
+				.. table.concat(sampleParts, " | "),
+			"quest"
 		)
 	elseif #snapshotOrder > 0 then
 		snapshotState.didLogEmptyBuildDiagnostics = false
@@ -3646,16 +3765,9 @@ function QuestTogether:PrintChatLogDestinationMessage()
 end
 
 function QuestTogether:Debug(message, category)
-	if not self:IsDebugEnabled() then
-		return false
-	end
-
-	local prefix = "Debug"
-	if category and category ~= "" then
-		prefix = prefix .. "[" .. tostring(category) .. "]"
-	end
-
-	self:PrintChatLogSystemMessage(prefix .. ": " .. tostring(message))
+	self:LogDebugLine(tostring(message), {
+		category = category,
+	})
 	return true
 end
 
@@ -3664,7 +3776,7 @@ function QuestTogether:Debugf(category, formatString, ...)
 		formatString = category
 		category = nil
 	end
-	if not self:IsDebugEnabled() then
+	if formatString == nil then
 		return false
 	end
 
@@ -3678,6 +3790,26 @@ end
 
 function QuestTogether:DebugState(category, label, value)
 	return self:Debug(tostring(label or "state") .. "=" .. FormatDebugValue(value), category)
+end
+
+function QuestTogether:RemoveDebugLogEntriesByCategory(category)
+	local normalizedCategory = self:NormalizeDebugCategory(category)
+	local debugLogLines = self:GetDebugLogStore()
+	local retainedEntries = {}
+	for index = 1, #debugLogLines do
+		local entry = debugLogLines[index]
+		if type(entry) == "table" and self:NormalizeDebugCategory(entry.category) ~= normalizedCategory then
+			retainedEntries[#retainedEntries + 1] = entry
+		end
+	end
+
+	wipe(debugLogLines)
+	for index = 1, #retainedEntries do
+		debugLogLines[index] = retainedEntries[index]
+	end
+	self.debugLogStoreNormalized = false
+	self:NormalizeDebugLogStoreEntries(debugLogLines)
+	self:RequestDebugLogWindowRefresh()
 end
 
 function QuestTogether:GetPlayerName()
@@ -3700,6 +3832,11 @@ function QuestTogether:GetAnnouncementOptionKey(eventType)
 		QUEST_READY_TO_TURN_IN = "announceReadyToTurnIn",
 		QUEST_REMOVED = "announceRemoved",
 		QUEST_PROGRESS = "announceProgress",
+		DELVE_ENTERED = "announceAccepted",
+		DELVE_LEFT = "announceRemoved",
+		DELVE_OBJECTIVE_ENTERED = "announceProgress",
+		DELVE_OBJECTIVE_PROGRESS = "announceProgress",
+		DELVE_OBJECTIVE_COMPLETED = "announceCompleted",
 		WORLD_QUEST_ENTERED = "announceWorldQuestAreaEnter",
 		WORLD_QUEST_LEFT = "announceWorldQuestAreaLeave",
 		WORLD_QUEST_PROGRESS = "announceWorldQuestProgress",
@@ -3727,21 +3864,20 @@ function QuestTogether:IsBonusObjectiveAnnouncementType(eventType)
 		or eventType == "BONUS_OBJECTIVE_COMPLETED"
 end
 
+function QuestTogether:IsDelveAnnouncementType(eventType)
+	return eventType == "DELVE_ENTERED"
+		or eventType == "DELVE_LEFT"
+		or eventType == "DELVE_OBJECTIVE_ENTERED"
+		or eventType == "DELVE_OBJECTIVE_PROGRESS"
+		or eventType == "DELVE_OBJECTIVE_COMPLETED"
+end
+
 function QuestTogether:ShouldDisplayAnnouncementType(eventType)
 	local optionKey = self:GetAnnouncementOptionKey(eventType)
 	if not optionKey then
-		self:Debugf("announce", "Display gate eventType=%s option=<none> allowed=true", tostring(eventType))
 		return true
 	end
-	local allowed = self:GetOption(optionKey) and true or false
-	self:Debugf(
-		"announce",
-		"Display gate eventType=%s option=%s allowed=%s",
-		tostring(eventType),
-		tostring(optionKey),
-		tostring(allowed)
-	)
-	return allowed
+	return self:GetOption(optionKey) and true or false
 end
 
 function QuestTogether:IsWorldQuest(questId)
@@ -3855,18 +3991,10 @@ end
 function QuestTogether:NormalizeAnnouncementDisplayOptions()
 	local profile = self.db.profile
 	if profile.emoteOnQuestCompletion == nil then
-		if profile.doEmotes ~= nil then
-			profile.emoteOnQuestCompletion = profile.doEmotes and true or false
-		else
-			profile.emoteOnQuestCompletion = self.DEFAULTS.profile.emoteOnQuestCompletion
-		end
+		profile.emoteOnQuestCompletion = self.DEFAULTS.profile.emoteOnQuestCompletion
 	end
 	if profile.emoteOnNearbyPlayerQuestCompletion == nil then
-		if profile.doEmotes ~= nil then
-			profile.emoteOnNearbyPlayerQuestCompletion = profile.doEmotes and true or false
-		else
-			profile.emoteOnNearbyPlayerQuestCompletion = self.DEFAULTS.profile.emoteOnNearbyPlayerQuestCompletion
-		end
+		profile.emoteOnNearbyPlayerQuestCompletion = self.DEFAULTS.profile.emoteOnNearbyPlayerQuestCompletion
 	end
 	if not self:IsChatLogDestination(profile.chatLogDestination) then
 		profile.chatLogDestination = self.DEFAULTS.profile.chatLogDestination
@@ -3925,13 +4053,6 @@ function QuestTogether:SetOption(key, value)
 		return false
 	end
 	self.db.profile[key] = value
-	self:Debugf(
-		"options",
-		"Set option key=%s old=%s new=%s",
-		tostring(key),
-		FormatDebugValue(oldValue),
-		FormatDebugValue(self.db.profile[key])
-	)
 	if key == "nameplateQuestIconStyle" then
 		self:NormalizeNameplateOptions()
 	end
@@ -3955,11 +4076,6 @@ function QuestTogether:SetOption(key, value)
 	end
 	if key == "chatLogDestination" and value == "main" then
 		self:CloseQuestLogChatFrame()
-	end
-	if key == "debugMode" then
-		if self.RefreshPartyRoster then
-			self:RefreshPartyRoster()
-		end
 	end
 	if
 		key == "showChatBubbles"
@@ -4017,7 +4133,6 @@ end
 function QuestTogether:QueueQuestLogTask(taskFn)
 	if type(taskFn) == "function" then
 		table.insert(self.onQuestLogUpdate, taskFn)
-		self:Debugf("quest", "Queued quest log task count=%d", #self.onQuestLogUpdate)
 		if self.ScheduleQuestLogTaskDrain then
 			self:ScheduleQuestLogTaskDrain("QueueQuestLogTask")
 		end
@@ -4035,20 +4150,23 @@ function QuestTogether:InitializeDatabase()
 		self.db.global = {}
 	end
 	self:ApplyDefaults(self.db.global, self.DEFAULTS.global)
-	self:EnsureProfileStorage()
-
-	local legacyProfile = nil
-	if type(self.db.profile) == "table" then
-		legacyProfile = self:DeepCopy(self.db.profile)
-	end
-
-	local hasExistingProfiles = false
-	for _, profileData in pairs(self.db.profiles) do
-		if type(profileData) == "table" then
-			hasExistingProfiles = true
-			break
+	self.db.global.debugLogLines = nil
+	if type(self.db.global.debugLogSearchFilter) ~= "string" then
+		if type(self.db.global.debugLogPrefixFilter) == "string" then
+			self.db.global.debugLogSearchFilter = self.db.global.debugLogPrefixFilter
+		else
+			self.db.global.debugLogSearchFilter = self.db.global.debugLogSearchFilter ~= nil
+				and tostring(self.db.global.debugLogSearchFilter)
+				or ""
 		end
 	end
+	if type(self.db.global.debugLogCategoryFilter) ~= "string" then
+		self.db.global.debugLogCategoryFilter = self.DEBUG_ALL_CATEGORIES
+	end
+	self.debugLogLines = {}
+	self.debugLogStoreNormalized = false
+	self.debugLogTextLengthSum = 0
+	self:EnsureProfileStorage()
 
 	local characterKey = self:GetCurrentCharacterKey()
 	local defaultProfileKey = NormalizeProfileKey(characterKey) or "Character"
@@ -4059,11 +4177,7 @@ function QuestTogether:InitializeDatabase()
 	end
 
 	if type(self.db.profiles[assignedProfileKey]) ~= "table" then
-		if legacyProfile and not hasExistingProfiles then
-			self.db.profiles[assignedProfileKey] = legacyProfile
-		else
-			self.db.profiles[assignedProfileKey] = self:DeepCopy(self.DEFAULTS.profile)
-		end
+		self.db.profiles[assignedProfileKey] = self:DeepCopy(self.DEFAULTS.profile)
 	end
 
 	self.activeCharacterKey = characterKey
@@ -4071,21 +4185,8 @@ function QuestTogether:InitializeDatabase()
 	self.db.profile = self.db.profiles[assignedProfileKey]
 	self:ApplyDefaults(self.db.profile, self.DEFAULTS.profile)
 
-	if self.db.profile.questLogChatFrameID == nil and self.db.global.questLogChatFrameID ~= nil then
-		self.db.profile.questLogChatFrameID = self.db.global.questLogChatFrameID
-	end
-	self.db.global.questLogChatFrameID = nil
-
 	self:NormalizeAnnouncementDisplayOptions()
 	self:NormalizeNameplateOptions()
-	self:DebugState("core", "db.profile", self.db.profile)
-	self:Debugf(
-		"profile",
-		"Initialized profile database character=%s profile=%s profiles=%d",
-		tostring(self.activeCharacterKey),
-		tostring(self.activeProfileKey),
-		#self:GetProfileKeys()
-	)
 end
 
 function QuestTogether:RegisterRuntimeEvents()
@@ -4097,7 +4198,6 @@ function QuestTogether:RegisterRuntimeEvents()
 		local ok = pcall(self.eventFrame.RegisterEvent, self.eventFrame, eventName)
 		if ok then
 			self.registeredRuntimeEvents[eventName] = true
-			self:Debugf("events", "Registered runtime event=%s", tostring(eventName))
 		else
 			self:Debugf("events", "Skipping unavailable runtime event=%s", tostring(eventName))
 		end
@@ -4108,7 +4208,6 @@ function QuestTogether:UnregisterRuntimeEvents()
 	for eventName in pairs(self.registeredRuntimeEvents or {}) do
 		-- Unregister should not block disable if Blizzard already removed an event.
 		pcall(self.eventFrame.UnregisterEvent, self.eventFrame, eventName)
-		self:Debugf("events", "Unregistered runtime event=%s", tostring(eventName))
 	end
 
 	if self.registeredRuntimeEvents then
@@ -4118,24 +4217,23 @@ end
 
 function QuestTogether:Enable()
 	self.db.profile.enabled = true
-	self:Debugf("core", "Enable requested hasLoggedIn=%s isEnabled=%s", tostring(self.hasLoggedIn), tostring(self.isEnabled))
 
 	if not self.hasLoggedIn then
 		-- We only fully enable after PLAYER_LOGIN when WoW APIs are guaranteed to be ready.
-		self:Debug("Deferring enable until PLAYER_LOGIN", "core")
 		return true
 	end
 	if self.isEnabled then
-		self:Debug("Enable skipped because addon is already enabled", "core")
 		return true
 	end
 
 	self:RegisterRuntimeEvents()
 	self.API.RegisterAddonPrefix(self.commPrefix)
-	self:Debugf("comms", "Registered addon prefix=%s", tostring(self.commPrefix))
 	self.isEnabled = true
 	if self.ResetTaskAreaStateStore then
 		self:ResetTaskAreaStateStore()
+	end
+	if self.ResetDelveObjectiveStateStore then
+		self:ResetDelveObjectiveStateStore()
 	end
 	if self.ResetRuntimeWorkStateStore then
 		self:ResetRuntimeWorkStateStore()
@@ -4145,6 +4243,9 @@ function QuestTogether:Enable()
 	end
 	if self.RefreshTaskAreaStates then
 		self:RefreshTaskAreaStates(false)
+	end
+	if self.RefreshDelveObjectiveStates then
+		self:RefreshDelveObjectiveStates(false, "Enable")
 	end
 
 	if self.EnableNameplateAugmentation then
@@ -4166,8 +4267,12 @@ function QuestTogether:Enable()
 	-- Delay initial scan briefly so quest log APIs are stable right after login/reload.
 	self.API.Delay(0.25, function()
 		if self.isEnabled then
-			self:Debug("Running delayed initial quest scan after enable", "quest")
 			self:ScanQuestLog()
+		end
+	end)
+	self.API.Delay(0.5, function()
+		if self.isEnabled and self.RefreshDelveObjectiveStates then
+			self:RefreshDelveObjectiveStates(false, "EnableDelayed")
 		end
 	end)
 
@@ -4176,10 +4281,8 @@ end
 
 function QuestTogether:Disable()
 	self.db.profile.enabled = false
-	self:Debugf("core", "Disable requested isEnabled=%s", tostring(self.isEnabled))
 
 	if not self.isEnabled then
-		self:Debug("Disable skipped because addon is already disabled", "core")
 		return true
 	end
 
@@ -4187,6 +4290,9 @@ function QuestTogether:Disable()
 	self.isEnabled = false
 	if self.ResetTaskAreaStateStore then
 		self:ResetTaskAreaStateStore()
+	end
+	if self.ResetDelveObjectiveStateStore then
+		self:ResetDelveObjectiveStateStore()
 	end
 	if self.ResetRuntimeWorkStateStore then
 		self:ResetRuntimeWorkStateStore()
@@ -4208,65 +4314,476 @@ end
 
 function QuestTogether:OpenHudEditMode()
 	if not EditModeManagerFrame then
-		self:Debug("Blizzard_EditMode not loaded; attempting to load it", "editmode")
-		-- Loading Blizzard UI modules can fail if unavailable; we handle the missing panel below.
 		pcall(UIParentLoadAddOn, "Blizzard_EditMode")
 	end
 
 	if self.API and self.API.InCombatLockdown and self.API.InCombatLockdown() then
-		self:Debug("Skipping HUD Edit Mode open during combat", "editmode")
 		return false
 	end
 
 	if not EditModeManagerFrame then
-		self:Debug("HUD Edit Mode unavailable", "editmode")
 		return false
 	end
 	if not self:CanAccessForeignFrame(EditModeManagerFrame) then
-		self:Debug("HUD Edit Mode frame is forbidden", "editmode")
 		return false
 	end
 
-	-- Avoid ShowUIPanel() to keep UIParentPanelManager taint risk low.
-	if EditModeManagerFrame.EnterEditMode then
-		local ok = pcall(EditModeManagerFrame.EnterEditMode, EditModeManagerFrame)
-		if ok then
-			self:Debug("Opening HUD Edit Mode via EnterEditMode", "editmode")
+	if type(EditModeManagerFrame.EnterEditMode) ~= "function" then
+		return false
+	end
+
+	local ok = pcall(EditModeManagerFrame.EnterEditMode, EditModeManagerFrame)
+	return ok
+end
+
+function QuestTogether:ClearDebugLog()
+	local debugLogLines = {}
+	self.debugLogLines = debugLogLines
+	self.debugLogTextLengthSum = 0
+	self.debugLogStoreNormalized = true
+	self:RefreshCopyableWindow()
+end
+
+function QuestTogether:ResetDebugLogFilters()
+	local previousCategory = self:GetDebugLogCategoryFilter()
+	local previousSearch = self:GetDebugLogSearchFilter()
+	if self.db and self.db.global then
+		self.db.global.debugLogCategoryFilter = self.DEBUG_ALL_CATEGORIES
+		self.db.global.debugLogSearchFilter = ""
+	end
+	if previousCategory ~= self.DEBUG_ALL_CATEGORIES or previousSearch ~= "" then
+		self:RefreshCopyableWindow()
+	end
+end
+
+function QuestTogether:ClearDebugWindow()
+	self:ClearDebugLog()
+	self:ResetDebugLogFilters()
+end
+
+function QuestTogether:NormalizeDebugCategory(category)
+	if type(category) ~= "string" then
+		return self.DEBUG_DEFAULT_CATEGORY
+	end
+
+	local normalized = string.upper(self:SafeTrimString(category, ""))
+	if normalized == "" then
+		return self.DEBUG_DEFAULT_CATEGORY
+	end
+
+	normalized = string.gsub(normalized, "%s+", "_")
+	normalized = string.gsub(normalized, "[^%w_%-]", "")
+	if normalized == "" then
+		return self.DEBUG_DEFAULT_CATEGORY
+	end
+
+	return normalized
+end
+
+function QuestTogether:NormalizeDebugLogStoreEntries(debugLogLines)
+	debugLogLines = type(debugLogLines) == "table" and debugLogLines or {}
+	local textLengthSum = 0
+	for index = 1, #debugLogLines do
+		local entry = debugLogLines[index]
+		if type(entry) ~= "table" then
+			entry = {
+				text = tostring(entry or ""),
+				category = self.DEBUG_DEFAULT_CATEGORY,
+			}
+			debugLogLines[index] = entry
+		else
+			if type(entry.text) ~= "string" then
+				entry.text = tostring(entry.text or "")
+			end
+			entry.category = self:NormalizeDebugCategory(entry.category)
+		end
+		textLengthSum = textLengthSum + string.len(entry.text or "")
+	end
+
+	self.debugLogTextLengthSum = textLengthSum
+	self.debugLogStoreNormalized = true
+	return debugLogLines
+end
+
+function QuestTogether:GetDebugLogStore()
+	if type(self.debugLogLines) ~= "table" then
+		self.debugLogLines = {}
+		self.debugLogStoreNormalized = false
+	end
+	if not self.debugLogStoreNormalized then
+		self:NormalizeDebugLogStoreEntries(self.debugLogLines)
+	end
+	return self.debugLogLines
+end
+
+function QuestTogether:DoesDebugLogCategoryHaveEntries(category)
+	local normalizedCategory = self:NormalizeDebugCategory(category)
+	if normalizedCategory == self.DEBUG_ALL_CATEGORIES then
+		return true
+	end
+
+	local entries = self:GetDebugLogStore()
+	for index = 1, #entries do
+		local entry = entries[index]
+		if type(entry) == "table" and self:NormalizeDebugCategory(entry.category) == normalizedCategory then
 			return true
 		end
 	end
 
-	if EditModeManagerFrame.Show then
-		local ok = pcall(EditModeManagerFrame.Show, EditModeManagerFrame)
-		if ok then
-			self:Debug("Opening HUD Edit Mode via Show", "editmode")
-			return true
-		end
-	end
-
-	self:Debug("HUD Edit Mode unavailable", "editmode")
 	return false
 end
 
-function QuestTogether:ClearTestResultLog()
-	self.testResultLogLines = {}
-	self:RefreshCopyableWindow()
+function QuestTogether:GetDebugLogCategoryFilter()
+	if self.db and self.db.global then
+		local storedFilter = self.db.global.debugLogCategoryFilter
+		if type(storedFilter) ~= "string" then
+			storedFilter = self.DEBUG_ALL_CATEGORIES
+		end
+		if string.upper(storedFilter) == self.DEBUG_ALL_CATEGORIES then
+			storedFilter = self.DEBUG_ALL_CATEGORIES
+		else
+			storedFilter = self:NormalizeDebugCategory(storedFilter)
+			if not self:DoesDebugLogCategoryHaveEntries(storedFilter) then
+				storedFilter = self.DEBUG_ALL_CATEGORIES
+			end
+		end
+		self.db.global.debugLogCategoryFilter = storedFilter
+		return storedFilter
+	end
+
+	return self.DEBUG_ALL_CATEGORIES
 end
 
-function QuestTogether:GetTestResultLogText()
-	return table.concat(self.testResultLogLines or {}, "\n")
+function QuestTogether:SetDebugLogCategoryFilter(filter)
+	local normalized = self.DEBUG_ALL_CATEGORIES
+	if type(filter) == "string" and string.upper(filter) ~= self.DEBUG_ALL_CATEGORIES then
+		normalized = self:NormalizeDebugCategory(filter)
+	end
+	local previous = self:GetDebugLogCategoryFilter()
+	if self.db and self.db.global then
+		self.db.global.debugLogCategoryFilter = normalized
+	end
+	if previous ~= normalized then
+		self:RefreshCopyableWindow()
+	end
+	return normalized
 end
 
-function QuestTogether:SetTestResultLogLines(lines)
-	local sanitized = {}
-	if type(lines) == "table" then
-		for index = 1, #lines do
-			local line = lines[index]
-			sanitized[#sanitized + 1] = tostring(line or "")
+local function ParseDebugLogSearchTerms(searchText)
+	local normalizedSearch = type(searchText) == "string" and searchText or (searchText ~= nil and tostring(searchText) or "")
+	local terms = {}
+	local length = string.len(normalizedSearch)
+	local index = 1
+
+	while index <= length do
+		while index <= length do
+			local currentChar = string.sub(normalizedSearch, index, index)
+			if currentChar ~= " " and currentChar ~= "\t" and currentChar ~= "\r" and currentChar ~= "\n" then
+				break
+			end
+			index = index + 1
+		end
+		if index > length then
+			break
+		end
+
+		local isExact = string.sub(normalizedSearch, index, index) == "\""
+		local termText = ""
+		if isExact then
+			local closingQuoteIndex = string.find(normalizedSearch, "\"", index + 1, true)
+			if closingQuoteIndex then
+				termText = string.sub(normalizedSearch, index + 1, closingQuoteIndex - 1)
+				index = closingQuoteIndex + 1
+			else
+				termText = string.sub(normalizedSearch, index + 1)
+				index = length + 1
+			end
+		else
+			local termEndIndex = index
+			while termEndIndex <= length do
+				local currentChar = string.sub(normalizedSearch, termEndIndex, termEndIndex)
+				if currentChar == " " or currentChar == "\t" or currentChar == "\r" or currentChar == "\n" then
+					break
+				end
+				termEndIndex = termEndIndex + 1
+			end
+			termText = string.sub(normalizedSearch, index, termEndIndex - 1)
+			index = termEndIndex
+		end
+
+		termText = string.lower(termText or "")
+		if termText ~= "" then
+			terms[#terms + 1] = {
+				text = termText,
+				exact = isExact,
+			}
 		end
 	end
-	self.testResultLogLines = sanitized
-	self:RefreshCopyableWindow()
+
+	return terms
+end
+
+local function DoesDebugLogFuzzyTermMatch(textValue, termText)
+	if termText == "" then
+		return true
+	end
+
+	local searchStartIndex = 1
+	for characterIndex = 1, string.len(termText) do
+		local targetCharacter = string.sub(termText, characterIndex, characterIndex)
+		local foundIndex = string.find(textValue, targetCharacter, searchStartIndex, true)
+		if not foundIndex then
+			return false
+		end
+		searchStartIndex = foundIndex + 1
+	end
+
+	return true
+end
+
+function QuestTogether:GetDebugLogSearchFilter()
+	if self.db and self.db.global then
+		local storedSearch = self.db.global.debugLogSearchFilter
+		if type(storedSearch) ~= "string" then
+			storedSearch = storedSearch ~= nil and tostring(storedSearch) or ""
+			self.db.global.debugLogSearchFilter = storedSearch
+		end
+		return storedSearch
+	end
+
+	return ""
+end
+
+function QuestTogether:SetDebugLogSearchFilter(searchText)
+	local normalizedSearch = type(searchText) == "string" and searchText or (searchText ~= nil and tostring(searchText) or "")
+	local previous = self:GetDebugLogSearchFilter()
+	if self.db and self.db.global then
+		self.db.global.debugLogSearchFilter = normalizedSearch
+	end
+	if previous ~= normalizedSearch then
+		self:RefreshCopyableWindow()
+	end
+	return normalizedSearch
+end
+
+function QuestTogether:GetDebugLogPrefixFilter()
+	return self:GetDebugLogSearchFilter()
+end
+
+function QuestTogether:SetDebugLogPrefixFilter(prefix)
+	return self:SetDebugLogSearchFilter(prefix)
+end
+
+function QuestTogether:GetDebugLogEntryDisplayText(entry)
+	if type(entry) ~= "table" then
+		return ""
+	end
+
+	local category = self:NormalizeDebugCategory(entry.category)
+	local text = type(entry.text) == "string" and entry.text or tostring(entry.text or "")
+	return string.format("[%s] %s", category, text)
+end
+
+function QuestTogether:GetDebugLogAvailableCategories()
+	local entries = self:GetDebugLogStore()
+	local available = {
+		[self.DEBUG_ALL_CATEGORIES] = true,
+	}
+	for index = 1, #entries do
+		local entry = entries[index]
+		if type(entry) == "table" then
+			available[self:NormalizeDebugCategory(entry.category)] = true
+		end
+	end
+
+	local categories = {}
+	for category in pairs(available) do
+		categories[#categories + 1] = category
+	end
+	table.sort(categories, function(left, right)
+		if left == self.DEBUG_ALL_CATEGORIES then
+			return true
+		end
+		if right == self.DEBUG_ALL_CATEGORIES then
+			return false
+		end
+		return left < right
+	end)
+	return categories
+end
+
+function QuestTogether:ShouldIncludeDebugLogEntry(entry, filter, searchFilter)
+	if type(entry) ~= "table" then
+		return false
+	end
+	local normalizedFilter = self.DEBUG_ALL_CATEGORIES
+	if type(filter) == "string" and string.upper(filter) ~= self.DEBUG_ALL_CATEGORIES then
+		normalizedFilter = self:NormalizeDebugCategory(filter)
+	end
+	if normalizedFilter ~= self.DEBUG_ALL_CATEGORIES then
+		if self:NormalizeDebugCategory(entry.category) ~= normalizedFilter then
+			return false
+		end
+	end
+
+	local searchTerms = ParseDebugLogSearchTerms(searchFilter)
+	if #searchTerms > 0 then
+		local text = string.lower(self:GetDebugLogEntryDisplayText(entry))
+		for index = 1, #searchTerms do
+			local term = searchTerms[index]
+			if term.exact then
+				if not string.find(text, term.text, 1, true) then
+					return false
+				end
+			elseif not DoesDebugLogFuzzyTermMatch(text, term.text) then
+				return false
+			end
+		end
+	end
+
+	return true
+end
+
+function QuestTogether:GetFilteredDebugLogEntries(filter, searchFilter)
+	local entries = self:GetDebugLogStore()
+	local normalizedFilter = self.DEBUG_ALL_CATEGORIES
+	if type(filter) == "string" and string.upper(filter) ~= self.DEBUG_ALL_CATEGORIES then
+		normalizedFilter = self:NormalizeDebugCategory(filter)
+	end
+	local normalizedSearch = type(searchFilter) == "string" and searchFilter or (searchFilter ~= nil and tostring(searchFilter) or "")
+	local filteredEntries = {}
+	for index = 1, #entries do
+		local entry = entries[index]
+		if self:ShouldIncludeDebugLogEntry(entry, normalizedFilter, normalizedSearch) then
+			filteredEntries[#filteredEntries + 1] = entry
+		end
+	end
+	return filteredEntries
+end
+
+function QuestTogether:GetDebugLogText(filter, searchFilter)
+	local filteredEntries = self:GetFilteredDebugLogEntries(filter, searchFilter)
+	local parts = {}
+	for index = 1, #filteredEntries do
+		parts[#parts + 1] = self:GetDebugLogEntryDisplayText(filteredEntries[index])
+	end
+	return table.concat(parts, "\n")
+end
+
+function QuestTogether:GetDebugLogMetrics(filter, searchFilter)
+	local filteredEntries = self:GetFilteredDebugLogEntries(filter, searchFilter)
+	local totalEntries = self:GetDebugLogStore()
+	local shownCount = #filteredEntries
+	local parts = {}
+	for index = 1, #filteredEntries do
+		parts[#parts + 1] = self:GetDebugLogEntryDisplayText(filteredEntries[index])
+	end
+	local charCount = string.len(table.concat(parts, "\n"))
+	return shownCount, charCount, #totalEntries
+end
+
+function QuestTogether:BeginDebugLogBatchUpdate()
+	self.debugLogRefreshBatchDepth = (self.debugLogRefreshBatchDepth or 0) + 1
+end
+
+function QuestTogether:EndDebugLogBatchUpdate()
+	local currentDepth = self.debugLogRefreshBatchDepth or 0
+	if currentDepth <= 0 then
+		self.debugLogRefreshBatchDepth = 0
+		return
+	end
+
+	currentDepth = currentDepth - 1
+	self.debugLogRefreshBatchDepth = currentDepth
+	if currentDepth == 0 and self.debugLogRefreshPending then
+		self.debugLogRefreshPending = false
+		local frame = self.copyableWindow
+			if frame and frame:IsShown() and frame.copyableTitle == DEBUG_WINDOW_TITLE then
+				self:RefreshCopyableWindow()
+			end
+		end
+end
+
+function QuestTogether:RequestDebugLogWindowRefresh()
+	if (self.debugLogRefreshBatchDepth or 0) > 0 then
+		self.debugLogRefreshPending = true
+		return
+	end
+
+	local frame = self.copyableWindow
+	if frame and frame:IsShown() and frame.copyableTitle == DEBUG_WINDOW_TITLE then
+		self:RefreshCopyableWindow()
+	end
+end
+
+function QuestTogether:IsCopyableWindowPinnedToBottom(frame)
+	if not frame or not frame.scrollFrame or not frame.scrollFrame.GetVerticalScrollRange then
+		return false
+	end
+
+	local scrollRange = math.max(0, frame.scrollFrame:GetVerticalScrollRange() or 0)
+	if scrollRange <= 1 then
+		return true
+	end
+
+	local currentScroll = 0
+	if frame.scrollFrame.GetVerticalScroll then
+		currentScroll = math.max(0, frame.scrollFrame:GetVerticalScroll() or 0)
+	end
+
+	return currentScroll >= math.max(0, scrollRange - 2)
+end
+
+function QuestTogether:UpdateCopyableWindowTailPinned(frame)
+	if not frame or frame.copyableTitle ~= DEBUG_WINDOW_TITLE then
+		return
+	end
+	if frame.copyableSyncingScroll then
+		return
+	end
+	frame.copyableTailPinned = self:IsCopyableWindowPinnedToBottom(frame)
+end
+
+function QuestTogether:LogDebugLine(line, options)
+	local normalizedLine = tostring(line or "")
+	options = type(options) == "table" and options or {}
+	local debugLogLines = self:GetDebugLogStore()
+	local normalizedCategory = self:NormalizeDebugCategory(options.category or self.DEBUG_DEFAULT_CATEGORY)
+	debugLogLines[#debugLogLines + 1] = {
+		text = normalizedLine,
+		category = normalizedCategory,
+	}
+	self.debugLogTextLengthSum = (self.debugLogTextLengthSum or 0) + string.len(normalizedLine)
+	local maxLines = self.DEBUG_LOG_MAX_LINES or 400
+	while #debugLogLines > maxLines do
+		local removedEntry = table.remove(debugLogLines, 1)
+		if type(removedEntry) == "table" and type(removedEntry.text) == "string" then
+			self.debugLogTextLengthSum = math.max(0, (self.debugLogTextLengthSum or 0) - string.len(removedEntry.text))
+		end
+	end
+	local maxChars = self.DEBUG_LOG_MAX_CHARS or 200000
+	local currentCharCount = (self.debugLogTextLengthSum or 0) + math.max(0, #debugLogLines - 1)
+	while currentCharCount > maxChars and #debugLogLines > 1 do
+		local removedEntry = table.remove(debugLogLines, 1)
+		if type(removedEntry) == "table" and type(removedEntry.text) == "string" then
+			self.debugLogTextLengthSum = math.max(0, (self.debugLogTextLengthSum or 0) - string.len(removedEntry.text))
+		end
+		currentCharCount = (self.debugLogTextLengthSum or 0) + math.max(0, #debugLogLines - 1)
+	end
+	self:RequestDebugLogWindowRefresh()
+end
+
+function QuestTogether:AppendDebugLogLine(line)
+	self:LogDebugLine(line)
+end
+
+function QuestTogether:AppendDebugLogLines(lines, options)
+	if type(lines) ~= "table" then
+		return
+	end
+	for index = 1, #lines do
+		self:LogDebugLine(lines[index], options)
+	end
 end
 
 function QuestTogether:RefreshCopyableWindow()
@@ -4274,9 +4791,14 @@ function QuestTogether:RefreshCopyableWindow()
 	if not frame or not frame.editBox or not frame.scrollFrame then
 		return
 	end
+	local previousScroll = 0
+	if frame.scrollFrame.GetVerticalScroll then
+		previousScroll = math.max(0, frame.scrollFrame:GetVerticalScroll() or 0)
+	end
 
 	local titleText = type(frame.copyableTitle) == "string" and frame.copyableTitle or "QuestTogether"
 	local hintText = type(frame.copyableHint) == "string" and frame.copyableHint or ""
+	local isDebugLogWindow = frame.copyableTitle == DEBUG_WINDOW_TITLE
 	local getText = frame.copyableGetText
 	local text = type(frame.copyableText) == "string" and frame.copyableText or ""
 	if type(getText) == "function" then
@@ -4290,24 +4812,113 @@ function QuestTogether:RefreshCopyableWindow()
 		end
 	end
 
+	if isDebugLogWindow then
+		local activeFilter = self:GetDebugLogCategoryFilter()
+		local activeSearchFilter = self:GetDebugLogSearchFilter()
+		local lineCount, charCount, totalCount = self:GetDebugLogMetrics(activeFilter, activeSearchFilter)
+		local searchLabel = ""
+		if activeSearchFilter ~= "" then
+			local displaySearch = activeSearchFilter
+			if string.len(displaySearch) > 32 then
+				displaySearch = string.sub(displaySearch, 1, 29) .. "..."
+			end
+			searchLabel = string.format(' search="%s"', displaySearch)
+		end
+		titleText = string.format(
+			"%s [%s%s] (%d/%d lines, %d chars)",
+			titleText,
+			activeFilter,
+			searchLabel,
+			lineCount,
+			totalCount,
+			charCount
+		)
+	end
+
 	if frame.titleLabel then
 		frame.titleLabel:SetText(titleText)
 	end
-	if frame.hintLabel then
-		frame.hintLabel:SetText(hintText)
+		if frame.hintLabel then
+			frame.hintLabel:SetText(hintText)
+			frame.hintLabel:SetShown(hintText ~= "")
+		end
+		if frame.textInset then
+			frame.textInset:ClearAllPoints()
+			if hintText ~= "" then
+				frame.textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -54)
+				frame.textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
+			else
+				frame.textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -34)
+				frame.textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
+			end
+		end
+		local editBoxWidth = math.max(1, frame.scrollFrame:GetWidth() - 18)
+	frame.editBox:SetWidth(editBoxWidth)
+	if frame.editBox.Instructions and frame.editBox.Instructions.SetWidth then
+		frame.editBox.Instructions:SetWidth(editBoxWidth)
 	end
 	frame.editBox:SetText(text)
-	frame.editBox:ClearFocus()
-	frame.editBox:HighlightText(0, 0)
-	frame.editBox:SetCursorPosition(0)
+	local textHeight = frame.editBox.GetStringHeight and frame.editBox:GetStringHeight() or 0
+	frame.editBox:SetHeight(math.max(frame.scrollFrame:GetHeight(), math.floor((textHeight or 0) + 24), 1))
+	if type(InputScrollFrame_OnTextChanged) == "function" then
+		InputScrollFrame_OnTextChanged(frame.editBox, false)
+	end
 	if frame.clearButton then
 		local hasClearHandler = type(frame.copyableOnClear) == "function"
 		frame.clearButton:SetShown(hasClearHandler)
 		frame.clearButton:SetText(type(frame.copyableClearLabel) == "string" and frame.copyableClearLabel or "Clear")
 	end
+	if frame.runTestsButton then
+		frame.runTestsButton:SetShown(isDebugLogWindow and type(self.RunTests) == "function")
+	end
+	if frame.categoryFilterLabel then
+		frame.categoryFilterLabel:SetShown(isDebugLogWindow)
+	end
+	if frame.categoryFilterDropdown then
+		frame.categoryFilterDropdown:SetShown(isDebugLogWindow)
+		if isDebugLogWindow then
+			UIDropDownMenu_Initialize(frame.categoryFilterDropdown, frame.categoryFilterDropdown.initializeMenu)
+			UIDropDownMenu_SetText(frame.categoryFilterDropdown, self:GetDebugLogCategoryFilter())
+		end
+	end
+	if frame.prefixFilterLabel then
+		frame.prefixFilterLabel:SetShown(isDebugLogWindow)
+	end
+	if frame.prefixFilterEditBox then
+		frame.prefixFilterEditBox:SetShown(isDebugLogWindow)
+		if isDebugLogWindow then
+			local activeSearchFilter = self:GetDebugLogSearchFilter()
+			if frame.prefixFilterEditBox:GetText() ~= activeSearchFilter then
+				frame.prefixFilterEditBox.isSyncingText = true
+				frame.prefixFilterEditBox:SetText(activeSearchFilter)
+				frame.prefixFilterEditBox.isSyncingText = nil
+			end
+		elseif frame.prefixFilterEditBox:HasFocus() then
+			frame.prefixFilterEditBox:ClearFocus()
+		end
+	end
 
-	local maxScroll = math.max(0, frame.editBox:GetHeight() - frame.scrollFrame:GetHeight())
-	frame.scrollFrame:SetVerticalScroll(maxScroll)
+	local shouldFollowTail = isDebugLogWindow
+		and (frame.copyableForceFollowTail == true or frame.copyableTailPinned == true)
+	local targetScroll = 0
+	if isDebugLogWindow then
+		local newRange = frame.scrollFrame.GetVerticalScrollRange
+			and math.max(0, frame.scrollFrame:GetVerticalScrollRange() or 0)
+			or 0
+		if shouldFollowTail then
+			targetScroll = newRange
+		else
+			targetScroll = math.min(previousScroll, newRange)
+		end
+	end
+
+	frame.copyableSyncingScroll = true
+	frame.scrollFrame:SetVerticalScroll(targetScroll)
+	frame.copyableSyncingScroll = nil
+	if isDebugLogWindow then
+		frame.copyableTailPinned = shouldFollowTail
+	end
+	frame.copyableForceFollowTail = nil
 end
 
 function QuestTogether:EnsureCopyableWindow()
@@ -4341,27 +4952,75 @@ function QuestTogether:EnsureCopyableWindow()
 	hint:SetJustifyH("LEFT")
 	hint:SetText("")
 
-	local textInset = CreateFrame("Frame", nil, frame, "InsetFrameTemplate3")
-	textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -54)
-	textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
+		local textInset = CreateFrame("Frame", nil, frame, "InsetFrameTemplate3")
+		textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -54)
+		textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
 
-	local scrollFrame = CreateFrame("ScrollFrame", nil, textInset, "UIPanelScrollFrameTemplate")
+	local scrollFrame = CreateFrame("ScrollFrame", nil, textInset, "InputScrollFrameTemplate")
 	scrollFrame:SetPoint("TOPLEFT", textInset, "TOPLEFT", 6, -6)
 	scrollFrame:SetPoint("BOTTOMRIGHT", textInset, "BOTTOMRIGHT", -28, 6)
+	scrollFrame.maxLetters = 200000
+	scrollFrame.hideCharCount = true
+	scrollFrame.instructions = ""
+	if type(InputScrollFrame_OnLoad) == "function" then
+		InputScrollFrame_OnLoad(scrollFrame)
+	end
+	local function updateTailPinned()
+		if QuestTogether and QuestTogether.UpdateCopyableWindowTailPinned then
+			QuestTogether:UpdateCopyableWindowTailPinned(frame)
+		end
+	end
+	scrollFrame:HookScript("OnVerticalScroll", updateTailPinned)
+	if scrollFrame.ScrollBar and scrollFrame.ScrollBar.HookScript then
+		local supportsValueChanged = true
+		if scrollFrame.ScrollBar.HasScript then
+			local ok, result = pcall(scrollFrame.ScrollBar.HasScript, scrollFrame.ScrollBar, "OnValueChanged")
+			supportsValueChanged = ok and result == true
+		end
+		if supportsValueChanged then
+			pcall(scrollFrame.ScrollBar.HookScript, scrollFrame.ScrollBar, "OnValueChanged", updateTailPinned)
+		end
+	end
+	scrollFrame:SetScript("OnSizeChanged", function(self, width)
+		local resolvedWidth = math.max(1, (width or self:GetWidth() or 0) - 18)
+		if self.EditBox then
+			self.EditBox:SetWidth(resolvedWidth)
+			if self.EditBox.Instructions and self.EditBox.Instructions.SetWidth then
+				self.EditBox.Instructions:SetWidth(resolvedWidth)
+			end
+		end
+	end)
 
-	local editBox = CreateFrame("EditBox", nil, scrollFrame)
+	local editBox = scrollFrame.EditBox
 	editBox:SetMultiLine(true)
 	editBox:SetAutoFocus(false)
 	editBox:EnableMouse(true)
 	editBox:SetFontObject(ChatFontNormal)
-	editBox:SetWidth(1)
+	if editBox.SetTextColor then
+		editBox:SetTextColor(1, 1, 1, 1)
+	end
+	editBox:SetJustifyH("LEFT")
+	editBox:SetJustifyV("TOP")
+	editBox:SetMaxLetters(scrollFrame.maxLetters or 200000)
+	if type(ScrollingEdit_OnLoad) == "function" then
+		ScrollingEdit_OnLoad(editBox)
+	elseif type(ScrollingEdit_SetCursorOffsets) == "function" then
+		ScrollingEdit_SetCursorOffsets(editBox, 0, 0)
+	else
+		editBox.cursorOffset = 0
+		editBox.cursorHeight = 0
+	end
 	editBox:SetScript("OnEscapePressed", function(self)
 		self:ClearFocus()
 	end)
-	scrollFrame:SetScrollChild(editBox)
-	scrollFrame:SetScript("OnSizeChanged", function(scrollChildFrame, width)
-		editBox:SetWidth(math.max(1, width - 8))
+	editBox:SetScript("OnTextChanged", function(self, isUserChange)
+		if type(InputScrollFrame_OnTextChanged) == "function" then
+			InputScrollFrame_OnTextChanged(self, isUserChange)
+		end
 	end)
+	if scrollFrame.CharCount then
+		scrollFrame.CharCount:Hide()
+	end
 
 	local selectAllButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 	selectAllButton:SetSize(96, 24)
@@ -4383,21 +5042,114 @@ function QuestTogether:EnsureCopyableWindow()
 		end
 	end)
 
+	local runTestsButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	runTestsButton:SetSize(96, 24)
+	runTestsButton:SetPoint("LEFT", clearButton, "RIGHT", 8, 0)
+	runTestsButton:SetText("Run Tests")
+	runTestsButton:SetScript("OnClick", function()
+		if QuestTogether.RunTests then
+			QuestTogether:RunTests()
+		end
+	end)
+
 	local closeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 	closeButton:SetSize(80, 24)
-	closeButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
+	closeButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, 12)
 	closeButton:SetText("Close")
 	closeButton:SetScript("OnClick", function()
 		frame:Hide()
 	end)
 
-	frame.scrollFrame = scrollFrame
-	frame.editBox = editBox
+	local categoryFilterLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	categoryFilterLabel:SetPoint("LEFT", runTestsButton, "RIGHT", 12, 0)
+	categoryFilterLabel:SetText("Category:")
+	categoryFilterLabel:Hide()
+
+	local categoryFilterDropdown = CreateFrame("Frame", nil, frame, "UIDropDownMenuTemplate")
+	categoryFilterDropdown:SetPoint("LEFT", categoryFilterLabel, "RIGHT", -10, -2)
+		categoryFilterDropdown.initializeMenu = function(_, level)
+			local categories = QuestTogether:GetDebugLogAvailableCategories()
+			local activeCategory = QuestTogether:GetDebugLogCategoryFilter()
+			for _, category in ipairs(categories) do
+				local selectedCategory = category
+				local info = UIDropDownMenu_CreateInfo()
+				info.text = selectedCategory
+				info.checked = selectedCategory == activeCategory
+				info.func = function()
+					QuestTogether:SetDebugLogCategoryFilter(selectedCategory)
+					CloseDropDownMenus()
+				end
+				UIDropDownMenu_AddButton(info, level)
+			end
+	end
+	UIDropDownMenu_SetWidth(categoryFilterDropdown, 120)
+	UIDropDownMenu_Initialize(categoryFilterDropdown, categoryFilterDropdown.initializeMenu)
+	categoryFilterDropdown:Hide()
+
+	local prefixFilterLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	prefixFilterLabel:SetPoint("LEFT", categoryFilterDropdown, "RIGHT", 2, 0)
+	prefixFilterLabel:SetText("Search:")
+	prefixFilterLabel:Hide()
+
+	local prefixFilterEditBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+	prefixFilterEditBox:SetAutoFocus(false)
+	prefixFilterEditBox:SetHeight(20)
+	prefixFilterEditBox:SetPoint("LEFT", prefixFilterLabel, "RIGHT", 6, 0)
+	prefixFilterEditBox:SetPoint("RIGHT", closeButton, "LEFT", -12, 0)
+	prefixFilterEditBox:SetScript("OnEscapePressed", function(self)
+		self:ClearFocus()
+	end)
+	prefixFilterEditBox:SetScript("OnEnterPressed", function(self)
+		self:ClearFocus()
+	end)
+	prefixFilterEditBox:SetScript("OnTextChanged", function(self)
+		if self.isSyncingText then
+			return
+		end
+		QuestTogether:SetDebugLogSearchFilter(self:GetText() or "")
+	end)
+	prefixFilterEditBox:Hide()
+
+		frame.scrollFrame = scrollFrame
+		frame.textInset = textInset
+		frame.editBox = editBox
 	frame.selectAllButton = selectAllButton
 	frame.clearButton = clearButton
+	frame.runTestsButton = runTestsButton
 	frame.closeButton = closeButton
+	frame.categoryFilterLabel = categoryFilterLabel
+	frame.categoryFilterDropdown = categoryFilterDropdown
+	frame.prefixFilterLabel = prefixFilterLabel
+	frame.prefixFilterEditBox = prefixFilterEditBox
 	frame.titleLabel = title
 	frame.hintLabel = hint
+
+	frame:SetResizable(true)
+	if frame.SetResizeBounds then
+		frame:SetResizeBounds(720, 420, 1400, 1000)
+	else
+		frame:SetMinResize(720, 420)
+	end
+	frame:SetScript("OnSizeChanged", function()
+		QuestTogether:RefreshCopyableWindow()
+	end)
+
+	local resizeButton = CreateFrame("Button", nil, frame)
+	resizeButton:SetSize(16, 16)
+	resizeButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -6, 6)
+	resizeButton:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+	resizeButton:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+	resizeButton:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+	resizeButton:SetScript("OnMouseDown", function()
+		frame:StartSizing("BOTTOMRIGHT")
+	end)
+	resizeButton:SetScript("OnMouseUp", function()
+		frame:StopMovingOrSizing()
+	end)
+	frame:SetScript("OnHide", function()
+		frame:StopMovingOrSizing()
+	end)
+	frame.resizeButton = resizeButton
 	self.copyableWindow = frame
 
 	return frame
@@ -4416,6 +5168,10 @@ function QuestTogether:ShowCopyableWindow(options)
 	frame.copyableGetText = type(options.getText) == "function" and options.getText or nil
 	frame.copyableOnClear = type(options.onClear) == "function" and options.onClear or nil
 	frame.copyableClearLabel = type(options.clearLabel) == "string" and options.clearLabel or "Clear"
+	frame.copyableForceFollowTail = frame.copyableTitle == DEBUG_WINDOW_TITLE
+	if frame.copyableTitle == DEBUG_WINDOW_TITLE then
+		frame.copyableTailPinned = true
+	end
 
 	frame:Show()
 	frame:Raise()
@@ -4423,15 +5179,15 @@ function QuestTogether:ShowCopyableWindow(options)
 	return true
 end
 
-function QuestTogether:ShowTestResultsWindow()
+function QuestTogether:ShowDebugWindow()
 	return self:ShowCopyableWindow({
-		title = "QuestTogether Test Results",
-		hint = "Results from /qt test. Click Select All, then Ctrl+C.",
+		title = DEBUG_WINDOW_TITLE,
+		hint = "",
 		getText = function(addon)
-			return addon:GetTestResultLogText()
+			return addon:GetDebugLogText(addon:GetDebugLogCategoryFilter(), addon:GetDebugLogSearchFilter())
 		end,
 		onClear = function(addon)
-			addon:ClearTestResultLog()
+			addon:ClearDebugWindow()
 		end,
 		clearLabel = "Clear",
 	})
@@ -4444,6 +5200,16 @@ function QuestTogether:InitializeSlashCommands()
 
 	SlashCmdList.QUESTTOGETHER = function(input)
 		QuestTogether:HandleSlashCommand(input or "")
+	end
+
+	SLASH_QUESTTOGETHERDUMP1 = "/qtd"
+	SlashCmdList.QUESTTOGETHERDUMP = function(input)
+		local normalizedInput = QuestTogether:SafeTrimString(input, "")
+		if normalizedInput ~= "" then
+			QuestTogether:HandleSlashCommand("dump " .. normalizedInput)
+			return
+		end
+		QuestTogether:ShowDebugWindow()
 	end
 end
 
@@ -4465,7 +5231,7 @@ function QuestTogether:PrintHelp()
 	self:Print("Commands:")
 	self:Print("/qt options - Open the QuestTogether options window")
 	self:Print("/qt enable | disable - Enable or disable runtime behavior")
-	self:Print("/qt debug [on|off|toggle] - Show or control debug mode")
+	self:Print("/qt debug - Open the shared QuestTogether debug window")
 	self:Print("/qt devlogall [on|off|toggle] - Show or control dev all-announcements logging")
 	self:Print("/qt set <option> <value> - Set a boolean option (e.g. emoteOnQuestCompletion off)")
 	self:Print("/qt get <option> - Read an option value")
@@ -4473,13 +5239,14 @@ function QuestTogether:PrintHelp()
 	self:Print("/qt ping - Request pong metadata from all QuestTogether clients in the shared channel")
 	self:Print("/qt bubbletest <text> - Send a QUEST_PROGRESS test event as your current target")
 	self:Print("/qt bubbletest <player> <text> - Send a QUEST_PROGRESS test event as a nearby visible player")
-	self:Print("/qt test - Run in-game unit tests and open results in a copyable window")
+	self:Print("/qt test - Run in-game unit tests, then open /qt dump filtered to TEST")
+	self:Print("/qt dump [clear|CATEGORY] - Open the shared QuestTogether debug window")
+	self:Print("/qtd - Shortcut for /qt dump")
 end
 
 function QuestTogether:HandleSlashCommand(input)
 	local command, rest = SafeMatch(input, "^(%S*)%s*(.-)$")
 	command = string.lower(command or "")
-	self:Debugf("slash", "Command=%s rest=%s", tostring(command), FormatDebugValue(rest))
 
 	if command == "" or command == "options" then
 		self:OpenOptionsWindow()
@@ -4503,26 +5270,6 @@ function QuestTogether:HandleSlashCommand(input)
 		return
 	end
 
-	if command == "debug" then
-		local flag = string.lower(rest or "")
-		if flag == "" then
-			self:Print("debugMode = " .. tostring(self:GetOption("debugMode")))
-			return
-		end
-		if flag == "toggle" then
-			self:SetOption("debugMode", not self:GetOption("debugMode"))
-		else
-			local boolValue = self:ParseBoolean(flag)
-			if boolValue == nil then
-				self:Print("Usage: /qt debug on|off|toggle")
-				return
-			end
-			self:SetOption("debugMode", boolValue)
-		end
-		self:Print("debugMode = " .. tostring(self:GetOption("debugMode")))
-		return
-	end
-
 	if command == "devlogall" then
 		local flag = string.lower(rest or "")
 		if flag == "" then
@@ -4540,6 +5287,21 @@ function QuestTogether:HandleSlashCommand(input)
 			self:SetOption("devLogAllAnnouncements", boolValue)
 		end
 		self:Print("devLogAllAnnouncements = " .. tostring(self:GetOption("devLogAllAnnouncements")))
+		return
+	end
+
+	if command == "dump" or command == "debuglog" or command == "debug" then
+		local normalizedRest = string.lower(rest or "")
+		if normalizedRest == "clear" then
+			self:ClearDebugWindow()
+		elseif normalizedRest ~= "" then
+			if string.upper(normalizedRest) == self.DEBUG_ALL_CATEGORIES then
+				self:SetDebugLogCategoryFilter(self.DEBUG_ALL_CATEGORIES)
+			else
+				self:SetDebugLogCategoryFilter(normalizedRest)
+			end
+		end
+			self:ShowDebugWindow()
 		return
 	end
 
@@ -4648,7 +5410,6 @@ function QuestTogether:ScanQuestLog()
 		return
 	end
 
-	self:Debug("ScanQuestLog()", "quest")
 	if self.EnsureQuestSnapshotStore then
 		self:EnsureQuestSnapshotStore()
 	end
@@ -4695,7 +5456,6 @@ function QuestTogether:ScanQuestLog()
 		end
 	end
 
-	self:Debugf("quest", "Scan complete questsTracked=%d", questsTracked)
 	local scanMessage = questsTracked .. " quests are being monitored by QuestTogether."
 	self:PrintConsoleAnnouncement(scanMessage)
 	if self.BuildLocalAnnouncementEvent and self.SendAnnouncementWireEvent then
@@ -4709,7 +5469,6 @@ end
 -- Store the current objective text state for one quest.
 function QuestTogether:WatchQuest(questId, questInfo)
 	local numericQuestId = self:NormalizeQuestID(questId)
-	self:Debugf("quest", "WatchQuest questId=%s", tostring(numericQuestId or questId))
 
 	if not numericQuestId then
 		return
@@ -4755,7 +5514,6 @@ function QuestTogether:WatchQuest(questId, questInfo)
 		isReadyForTurnIn = false,
 	}
 	self:RefreshTrackedQuestAnnouncementIcon(numericQuestId, tracker[numericQuestId])
-	self:DebugState("quest", "trackedQuest", tracker[numericQuestId])
 
 	if not questLogIndex then
 		return
@@ -4803,14 +5561,12 @@ function QuestTogether:OnInitialize()
 		self:InitializeOptionsWindow()
 	end
 	self.isInitialized = true
-	self:Debug("OnInitialize complete.", "core")
 end
 
 function QuestTogether:OnLogin()
 	self.hasLoggedIn = true
 	self.isLoggingOut = false
 	self:ReconcileQuestLogChatDestination()
-	self:Debugf("core", "PLAYER_LOGIN processed enabledSetting=%s", tostring(self.db and self.db.profile and self.db.profile.enabled))
 	if self.db.profile.enabled then
 		self:Enable()
 	end
@@ -4820,15 +5576,6 @@ end
 function QuestTogether:ADDON_LOADED(_, loadedAddonName)
 	if self.TryInstallNameplateHooks and self.isInitialized then
 		self:TryInstallNameplateHooks()
-	end
-	if
-		self.isInitialized
-		and self.IsKnownNameplateAddonName
-		and self:IsKnownNameplateAddonName(loadedAddonName)
-		and self.RefreshNameplateAugmentation
-	then
-		self:Debugf("nameplate", "Detected known nameplate addon=%s; refreshing augmentation compatibility", tostring(loadedAddonName))
-		self:RefreshNameplateAugmentation()
 	end
 	if loadedAddonName == "Blizzard_EditMode" and self.TryInstallPersonalBubbleEditModeHooks then
 		self:TryInstallPersonalBubbleEditModeHooks()
@@ -4843,7 +5590,6 @@ function QuestTogether:ADDON_LOADED(_, loadedAddonName)
 end
 
 function QuestTogether:PLAYER_LOGIN()
-	self:Debug("PLAYER_LOGIN()", "events")
 	if not self.isInitialized then
 		self:OnInitialize()
 	end

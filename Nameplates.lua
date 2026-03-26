@@ -12,10 +12,11 @@ Design constraints:
 ]]
 
 local QuestTogether = _G.QuestTogether
-local DEFAULT_ENABLE_TOOLTIP_QUEST_SCAN_FALLBACK = true
 local PLATER_QUEST_STATE_REFRESH_DELAY_SECONDS = 1.0
 local PLATER_INITIAL_QUEST_LOG_UPDATED_DELAY_SECONDS = 4.1
 local PLATER_INITIAL_FULL_REFRESH_DELAY_SECONDS = 5.1
+local NAMEPLATE_TOOLTIP_GUID_RETRY_DELAY_SECONDS = 0.2
+local NAMEPLATE_TOOLTIP_GUID_RETRY_MAX_ATTEMPTS = 4
 local NAMEPLATE_SCAN_TOOLTIP_NAME = "QuestTogetherNameplateScanTooltip"
 local ANNOUNCEMENT_BUBBLE_Y_OFFSET = 22
 local ANNOUNCEMENT_BUBBLE_FADE_IN_SECONDS = 0.2
@@ -26,6 +27,7 @@ local ApplyQuestIconVisual
 local EnsureQuestIcon
 local ResolveNameplateUnitToken
 local SafeUiNumber
+local SafeText
 
 -- Original icon used by this addon's first nameplate implementation.
 QuestTogether.NAMEPLATE_QUEST_ICON_TEXTURE = "Interface\\OPTIONSFRAME\\UI-OptionsFrame-NewFeatureIcon"
@@ -41,15 +43,6 @@ QuestTogether.NAMEPLATE_QUEST_HEALTH_COLOR = {
 	b = 0.05,
 }
 QuestTogether.NAMEPLATE_HEALTH_FILL_ATLAS = "UI-HUD-CoolDownManager-Bar"
-QuestTogether.knownNameplateAddons = QuestTogether.knownNameplateAddons or {
-	"Plater",
-	"TidyPlates_ThreatPlates",
-	"Kui_Nameplates",
-	"NeatPlates",
-	"bdNameplates",
-	"Aloft",
-}
-
 local function ClampColorComponent(value, fallback)
 	local numberValue = SafeUiNumber and SafeUiNumber(value, nil) or nil
 	if not numberValue then
@@ -66,6 +59,40 @@ end
 
 local function IsNonEmptyString(value)
 	return type(value) == "string" and value ~= ""
+end
+
+local function PrintOneShotNameplateDebug(addon, key, message)
+	if not addon or not addon.GetRuntimeFlag or not addon.SetRuntimeFlag then
+		return
+	end
+	if addon:GetRuntimeFlag(key, false) then
+		return
+	end
+	addon:SetRuntimeFlag(key, true)
+	if addon.LogDebugLine then
+		addon:LogDebugLine(SafeText(message, ""), {
+			category = "nameplate",
+		})
+	elseif addon.AppendDebugLogLine then
+		addon:AppendDebugLogLine(SafeText(message, ""))
+	end
+end
+
+local function PrintOneShotDelveDebug(addon, key, message)
+	if not addon or not addon.GetRuntimeFlag or not addon.SetRuntimeFlag then
+		return
+	end
+	if addon:GetRuntimeFlag(key, false) then
+		return
+	end
+	addon:SetRuntimeFlag(key, true)
+	if addon.LogDebugLine then
+		addon:LogDebugLine(SafeText(message, ""), {
+			category = "delve",
+		})
+	elseif addon.AppendDebugLogLine then
+		addon:AppendDebugLogLine(SafeText(message, ""))
+	end
 end
 
 local function ShouldSuppressStructuredQuestTooltipSource(addon)
@@ -104,7 +131,7 @@ local function CanMutateFrame(frame)
 	return frame ~= nil and not IsFrameForbidden(frame)
 end
 
-local function SafeText(value, fallback)
+function SafeText(value, fallback)
 	if QuestTogether and QuestTogether.SafeToString then
 		return QuestTogether:SafeToString(value, fallback or "")
 	end
@@ -524,7 +551,6 @@ local function ConfigureEditModeSlider(settingFrame, settingData, onValueChanged
 end
 
 function QuestTogether:ApplyPersonalBubbleEditSnapshot(snapshot)
-	self:DebugState("editmode", "ApplyPersonalBubbleEditSnapshot", snapshot)
 	if type(snapshot) ~= "table" then
 		return
 	end
@@ -553,7 +579,6 @@ function QuestTogether:ApplyPersonalBubbleEditSnapshot(snapshot)
 end
 
 function QuestTogether:CommitPersonalBubbleEditSession()
-	self:Debug("Committing personal bubble edit session", "editmode")
 	self.personalBubbleEditSession = nil
 	self.personalBubbleEditSessionRestoring = false
 	SyncPersonalBubbleEditModeDirtyState()
@@ -568,7 +593,6 @@ function QuestTogether:RevertPersonalBubbleEditSession()
 		return
 	end
 
-	self:Debug("Reverting personal bubble edit session", "editmode")
 	self:ApplyPersonalBubbleEditSnapshot(session.saved)
 	session.pending = false
 	SyncPersonalBubbleEditModeDirtyState()
@@ -578,7 +602,6 @@ function QuestTogether:RevertPersonalBubbleEditSession()
 end
 
 function QuestTogether:ResetPersonalBubbleEditSessionToDefaults()
-	self:Debug("Resetting personal bubble edit session to defaults", "editmode")
 	self.personalBubbleEditSessionRestoring = true
 	self:SetOption("chatBubbleSize", self.DEFAULTS.profile.chatBubbleSize)
 	self:SetOption("chatBubbleDuration", self.DEFAULTS.profile.chatBubbleDuration)
@@ -781,7 +804,6 @@ function QuestTogether:ApplySavedPersonalBubbleAnchor()
 
 	local parentFrame = hostFrame:GetParent() or UIParent
 	local anchor = self:GetPersonalBubbleAnchor()
-	self:DebugState("editmode", "ApplySavedPersonalBubbleAnchor", anchor)
 	hostFrame:ClearAllPoints()
 	hostFrame:SetPoint(anchor.point, parentFrame, anchor.relativePoint, anchor.x, anchor.y)
 	if self.personalBubbleEditModeDialog and self.personalBubbleEditModeDialog:IsShown() then
@@ -808,15 +830,6 @@ function QuestTogether:SavePersonalBubbleAnchorFromFrame(hostFrame)
 	end
 
 	local changed = self:SetPersonalBubbleAnchor(point, relativePoint, RoundOffset(offsetX), RoundOffset(offsetY))
-	self:Debugf(
-		"editmode",
-		"Saved personal bubble anchor point=%s relativePoint=%s x=%s y=%s changed=%s",
-		SafeText(point, ""),
-		SafeText(relativePoint, ""),
-		SafeText(RoundOffset(offsetX), "0"),
-		SafeText(RoundOffset(offsetY), "0"),
-		SafeText(changed, "false")
-	)
 	if changed and self:IsPersonalBubbleAnchorInEditMode() and not self.personalBubbleEditSessionRestoring then
 		UpdatePersonalBubbleEditSessionDirtyState()
 		self:RefreshPersonalBubbleEditModeDialog()
@@ -832,7 +845,6 @@ function QuestTogether:AttachPersonalBubbleEditModeDialog()
 
 	local savedPosition = GetSavedPersonalBubbleDialogPosition(dialog)
 	if savedPosition then
-		self:Debug("Attaching personal bubble dialog using user-placed position", "editmode")
 		dialog:ClearAllPoints()
 		dialog:SetPoint(
 			savedPosition.point,
@@ -845,14 +857,6 @@ function QuestTogether:AttachPersonalBubbleEditModeDialog()
 	end
 
 	local point, relativeTo, relativePoint, offsetX, offsetY = GetPersonalBubbleAnchorDialogAttachPoint()
-	self:Debugf(
-		"editmode",
-		"Attaching personal bubble dialog point=%s relativePoint=%s x=%s y=%s",
-		SafeText(point, ""),
-		SafeText(relativePoint, ""),
-		SafeText(offsetX, "0"),
-		SafeText(offsetY, "0")
-	)
 	dialog:ClearAllPoints()
 	dialog:SetPoint(point, relativeTo, relativePoint, offsetX, offsetY)
 end
@@ -925,7 +929,6 @@ function QuestTogether:SelectPersonalBubbleAnchor()
 	if not self:IsPersonalBubbleAnchorInEditMode() then
 		return
 	end
-	self:Debug("Selecting personal bubble anchor", "editmode")
 
 	EnsurePersonalBubbleEditSession()
 
@@ -950,7 +953,6 @@ function QuestTogether:SelectPersonalBubbleAnchor()
 end
 
 function QuestTogether:DeselectPersonalBubbleAnchor()
-	self:Debug("Deselecting personal bubble anchor", "editmode")
 	self.personalBubbleAnchorSelected = false
 	if self.personalBubbleEditModeDialog then
 		self.personalBubbleEditModeDialog:Hide()
@@ -1050,12 +1052,10 @@ end
 
 function QuestTogether:TryInstallPersonalBubbleEditModeHooks()
 	if self.personalBubbleEditModeHooksInstalled then
-		self:Debug("Personal bubble Edit Mode hooks already installed", "editmode")
 		return
 	end
 
 	if not EditModeManagerFrame or not EditModeManagerFrame.HookScript then
-		self:Debug("EditModeManagerFrame unavailable; cannot install personal bubble hooks", "editmode")
 		return
 	end
 
@@ -1063,13 +1063,11 @@ function QuestTogether:TryInstallPersonalBubbleEditModeHooks()
 	EnsurePersonalBubbleEditModeDialog()
 
 	EditModeManagerFrame:HookScript("OnShow", function()
-		QuestTogether:Debug("Edit Mode shown", "editmode")
 		EnsurePersonalBubbleEditSession()
 		QuestTogether:RefreshPersonalBubbleAnchorVisualState()
 		QuestTogether:RefreshPersonalBubbleEditModeDialog()
 	end)
 	EditModeManagerFrame:HookScript("OnHide", function()
-		QuestTogether:Debug("Edit Mode hidden", "editmode")
 		QuestTogether:DeselectPersonalBubbleAnchor()
 	end)
 
@@ -1095,7 +1093,6 @@ function QuestTogether:TryInstallPersonalBubbleEditModeHooks()
 	end
 
 	self.personalBubbleEditModeHooksInstalled = true
-	self:Debug("Installed personal bubble Edit Mode hooks", "editmode")
 end
 
 -- Returns true only for the dynamic nameplate unit tokens (nameplate1, nameplate2, ...).
@@ -1162,10 +1159,20 @@ function QuestTogether:GetAccessibleNameplateFrameForUnit(unitToken, requireShow
 end
 
 -- Plater's update_quest_cache bails in instances in local retail Plater.lua:11373-11376.
--- QuestTogether applies that same open-world boundary to nameplate quest detection.
+-- QuestTogether mostly applies that same open-world boundary, but active Delves are a
+-- deliberate exception because their objective state now comes from the Delve subsystem.
 function QuestTogether:IsNameplateAugmentationBlockedInCurrentContext()
 	local isInInstance = self.API and self.API.IsInInstance and self.API.IsInInstance()
-	return isInInstance and true or false
+	if not isInInstance then
+		return false
+	end
+	if self.IsActiveDelveScenario then
+		local isDelveActive = self:IsActiveDelveScenario()
+		if isDelveActive then
+			return false
+		end
+	end
+	return true
 end
 
 function QuestTogether:IsNameplateUnitPlayer(unitToken)
@@ -1267,7 +1274,10 @@ local function IsKnownQuestTitleLine(text)
 	if trimmedText == "" then
 		return false
 	end
-	return QuestTogether and QuestTogether.nameplateQuestTitleCache and QuestTogether.nameplateQuestTitleCache[trimmedText]
+	if QuestTogether and QuestTogether.nameplateQuestTitleCache and QuestTogether.nameplateQuestTitleCache[trimmedText] then
+		return true
+	end
+	return QuestTogether and QuestTogether.delveObjectiveTitleCache and QuestTogether.delveObjectiveTitleCache[trimmedText]
 		or false
 end
 
@@ -1425,6 +1435,59 @@ function QuestTogether:ForgetResolvedNameplateQuestState(unitToken)
 	self.nameplateQuestGuidByUnitToken[unitToken] = nil
 end
 
+function QuestTogether:GetNameplateTooltipResolveRetryCount(unitToken)
+	if not self:IsNameplateUnitToken(unitToken) then
+		return 0
+	end
+
+	local retryCounts = self.nameplateTooltipResolveRetryCountByUnitToken
+	if type(retryCounts) ~= "table" then
+		return 0
+	end
+
+	return SafeUiNumber(retryCounts[unitToken], 0) or 0
+end
+
+function QuestTogether:ClearNameplateTooltipResolveRetryCount(unitToken)
+	if not self:IsNameplateUnitToken(unitToken) then
+		return
+	end
+
+	local retryCounts = self.nameplateTooltipResolveRetryCountByUnitToken
+	if type(retryCounts) == "table" then
+		retryCounts[unitToken] = nil
+	end
+end
+
+function QuestTogether:MaybeScheduleNameplateTooltipGuidRetry(unitToken, reason)
+	if not self:IsNameplateUnitToken(unitToken) then
+		return false
+	end
+	if self.DoesNameplateUnitExist and not self:DoesNameplateUnitExist(unitToken) then
+		self:ClearNameplateTooltipResolveRetryCount(unitToken)
+		return false
+	end
+
+	local retryCount = self:GetNameplateTooltipResolveRetryCount(unitToken)
+	if retryCount >= NAMEPLATE_TOOLTIP_GUID_RETRY_MAX_ATTEMPTS then
+		self:ClearNameplateTooltipResolveRetryCount(unitToken)
+		return false
+	end
+
+	self.nameplateTooltipResolveRetryCountByUnitToken[unitToken] = retryCount + 1
+	if self.ScheduleNameplateTooltipResolution then
+		self:ScheduleNameplateTooltipResolution(
+			unitToken,
+			nil,
+			NAMEPLATE_TOOLTIP_GUID_RETRY_DELAY_SECONDS,
+			reason or "NameplateTooltipGuidRetry"
+		)
+		return true
+	end
+
+	return false
+end
+
 function QuestTogether:StoreResolvedNameplateQuestState(unitToken, unitGuid, isQuestObjective)
 	if not IsNonEmptyString(unitGuid) then
 		return
@@ -1438,6 +1501,7 @@ function QuestTogether:StoreResolvedNameplateQuestState(unitToken, unitGuid, isQ
 	if self:IsNameplateUnitToken(unitToken) then
 		self.nameplateQuestStateByUnitToken[unitToken] = isQuestObjective and true or false
 		self.nameplateQuestGuidByUnitToken[unitToken] = unitGuid
+		self:ClearNameplateTooltipResolveRetryCount(unitToken)
 	end
 end
 
@@ -1454,20 +1518,26 @@ function QuestTogether:TryGetCachedQuestObjectiveStateForGuid(unitGuid)
 	return true, cachedQuestObjective == true
 end
 
--- QuestTogether keeps the title cache on the quest-log side only.
+-- QuestTogether keeps the title cache on addon-owned quest and Delve state only.
 -- Plater also adds current-map world quest titles from C_TaskQuest map arrays,
 -- but those map-owned tables taint Blizzard POI/widget paths on the default UI.
--- Hidden quest-log rows still cover active world quest titles without touching
--- shared map state, which keeps default-nameplate quest detection boundary-safe.
+-- Hidden quest-log rows plus Delve scenario snapshots cover active objective titles
+-- without touching shared map state, which keeps default-nameplate detection boundary-safe.
 function QuestTogether:RebuildNameplateQuestTitleCache()
 	wipe(self.nameplateQuestTitleCache)
 
-	if self.API and self.API.IsInInstance and self.API.IsInInstance() then
+	local isDelveActive = self.IsActiveDelveScenario and self:IsActiveDelveScenario() or false
+
+	if self.API and self.API.IsInInstance and self.API.IsInInstance() and not isDelveActive then
 		return
 	end
 
 	if self.EnsureQuestSnapshotStore then
 		self:EnsureQuestSnapshotStore()
+	end
+	local delveTitleCache = self.GetDelveObjectiveTitleCache and self:GetDelveObjectiveTitleCache() or nil
+	if isDelveActive and self.RebuildDelveObjectiveStateStore and next(delveTitleCache or {}) == nil then
+		self:RebuildDelveObjectiveStateStore()
 	end
 
 	local snapshotByQuestID = self.GetQuestSnapshotByQuestID and self:GetQuestSnapshotByQuestID() or nil
@@ -1482,6 +1552,35 @@ function QuestTogether:RebuildNameplateQuestTitleCache()
 		if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
 			self.nameplateQuestTitleCache[questDetails.title] = true
 		end
+	end
+
+	delveTitleCache = self.GetDelveObjectiveTitleCache and self:GetDelveObjectiveTitleCache() or nil
+	for titleText in pairs(delveTitleCache or {}) do
+		if type(titleText) == "string" and titleText ~= "" then
+			self.nameplateQuestTitleCache[titleText] = true
+		end
+	end
+
+	if isDelveActive then
+		local delveTitles = {}
+		for titleText in pairs(delveTitleCache or {}) do
+			delveTitles[#delveTitles + 1] = titleText
+		end
+		table.sort(delveTitles)
+		if #delveTitles > 3 then
+			while #delveTitles > 3 do
+				table.remove(delveTitles)
+			end
+		end
+				PrintOneShotDelveDebug(
+					self,
+					"debugDelveNameplateCache",
+					string.format(
+						"nameplate_cache titles=%s mergedCount=%d",
+						table.concat(delveTitles, "|"),
+						#delveTitles
+					)
+			)
 	end
 end
 
@@ -1730,6 +1829,38 @@ function QuestTogether:GetHiddenQuestObjectiveTooltipLines(unitGuid)
 	return self:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
 end
 
+function QuestTogether:GetQuestObjectiveTooltipLineSources(unitToken, unitGuid)
+	if type(unitGuid) ~= "string" or unitGuid == "" then
+		return {}
+	end
+
+	local sourceOrder = {}
+
+	sourceOrder[#sourceOrder + 1] = {
+		name = "questie",
+		resolve = function()
+			return self:GetQuestieQuestObjectiveTooltipLines(unitGuid)
+		end,
+	}
+	sourceOrder[#sourceOrder + 1] = {
+		name = "structured",
+		resolve = function()
+			return self:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid)
+		end,
+	}
+
+	if self:IsNameplateTooltipScanEnabled() then
+		sourceOrder[#sourceOrder + 1] = {
+			name = "hidden",
+			resolve = function()
+				return self:GetHiddenQuestObjectiveTooltipLines(unitGuid)
+			end,
+		}
+	end
+
+	return sourceOrder
+end
+
 function QuestTogether:CanUseStructuredQuestTooltipAPI()
 	if not self.API then
 		return false
@@ -1738,30 +1869,31 @@ function QuestTogether:CanUseStructuredQuestTooltipAPI()
 	return type(self.API.GetTooltipDataForHyperlink) == "function"
 end
 
--- Test/helper entry point that mirrors Plater's client-specific source order:
--- retail/mainline uses Questie -> C_TooltipInfo (Plater.lua:11200-11218),
--- while the legacy branch falls back to a hidden GameTooltip instead
--- (Plater.lua:11219-11226).
-function QuestTogether:GetQuestObjectiveTooltipLines(unitToken, unitGuid)
-	if type(unitGuid) ~= "string" or unitGuid == "" then
-		return nil
+-- Test/helper entry point that mirrors Plater's source order for the current
+-- client. Structured-tooltip clients use Questie -> C_TooltipInfo, while
+-- older clients fall back to the addon-owned hidden GameTooltip path.
+function QuestTogether:GetQuestObjectiveTooltipLines(unitToken, unitGuid, startIndex)
+	local sources = self:GetQuestObjectiveTooltipLineSources(unitToken, unitGuid)
+	local firstIndex = SafeUiNumber(startIndex, 1) or 1
+	if firstIndex < 1 then
+		firstIndex = 1
+	end
+	for index = firstIndex, #sources do
+		local source = sources[index]
+		local tooltipLines = nil
+		if type(source) == "table" then
+			if type(source.resolve) == "function" then
+				tooltipLines = source.resolve()
+			else
+				tooltipLines = source.lines
+			end
+		end
+		if type(tooltipLines) == "table" and #tooltipLines > 0 then
+			return tooltipLines, source.name, index
+		end
 	end
 
-	local questieTooltipLines = self:GetQuestieQuestObjectiveTooltipLines(unitGuid)
-	if type(questieTooltipLines) == "table" and #questieTooltipLines > 0 then
-		return questieTooltipLines
-	end
-
-	local structuredTooltipLines = self:GetStructuredQuestObjectiveTooltipLines(unitToken, unitGuid)
-	if type(structuredTooltipLines) == "table" and #structuredTooltipLines > 0 then
-		return structuredTooltipLines
-	end
-
-	if not self:IsNameplateTooltipScanEnabled() then
-		return nil
-	end
-
-	return self:GetHiddenQuestObjectiveTooltipLines(unitGuid)
+	return nil
 end
 
 function QuestTogether:GetOrCreateNameplateScanTooltip()
@@ -1895,19 +2027,11 @@ function QuestTogether:ReadNameplateScanTooltipLines(scanTooltip, unitGuid)
 end
 
 function QuestTogether:IsNameplateTooltipScanEnabled()
-	-- Keep the addon-owned hidden tooltip scan as the final fallback source. The
-	-- shared runtime gate now blocks tooltip resolution in map-sensitive windows,
-	-- so this fallback stays feature-preserving without running through those
-	-- restricted contexts.
-	return DEFAULT_ENABLE_TOOLTIP_QUEST_SCAN_FALLBACK
+	return true
 end
 
--- Mirrors the client-specific source order in Plater.IsQuestObjective:
--- retail/mainline uses Questie -> C_TooltipInfo (Plater.lua:11200-11218),
--- while legacy clients use Questie -> hidden GameTooltip (Plater.lua:11219-11226).
--- QuestTogether suppresses the structured Blizzard source on mainline for map safety,
--- so the addon-owned hidden tooltip remains the final live fallback after Questie.
--- Plater does not special-case world-map visibility here, but QuestTogether has to.
+-- Mirrors Plater's source order while keeping live tooltip resolution disabled
+-- in map-sensitive runtime contexts.
 -- On the default UI, live unit-tooltip reads while AreaPOI/GameTooltip widget sets are
 -- active can taint Blizzard's shared world-map tooltip/widget path, so the tooltip
 -- evaluator reports "unresolved" there and lets the cache-driven resolver decide.
@@ -1932,12 +2056,62 @@ function QuestTogether:TryEvaluateQuestObjectiveViaTooltip(unitToken, unitFrame,
 		return false, false, unitGuid
 	end
 
-	local tooltipLines = self:GetQuestObjectiveTooltipLines(unitToken, unitGuid)
-	if type(tooltipLines) ~= "table" or #tooltipLines == 0 then
+	local resolvedAnyTooltipLines = false
+	local nextSourceIndex = 1
+	while true do
+		local tooltipLines, sourceName, resolvedSourceIndex =
+			self:GetQuestObjectiveTooltipLines(unitToken, unitGuid, nextSourceIndex)
+		if type(tooltipLines) ~= "table" or #tooltipLines == 0 then
+			break
+		end
+
+		resolvedAnyTooltipLines = true
+		local isQuestObjective = self:EvaluateTooltipQuestObjectiveLines(tooltipLines)
+		if self.IsActiveDelveScenario and self:IsActiveDelveScenario() then
+			local sampleTexts = {}
+			for index = 1, math.min(#tooltipLines, 3) do
+				local lineData = tooltipLines[index]
+				sampleTexts[#sampleTexts + 1] = SafeTrimText(GetTooltipQuestLinePrimaryText(lineData))
+			end
+						PrintOneShotDelveDebug(
+							self,
+							"debugDelveTooltipEval" .. tostring(sourceName or resolvedSourceIndex or nextSourceIndex),
+							string.format(
+							"tooltip_eval source=%s unit=%s guid=%s objective=%s lines=%s",
+							SafeText(sourceName, "<nil>"),
+							SafeText(unitToken, "<nil>"),
+							SafeText(unitGuid, "<nil>"),
+						tostring(isQuestObjective),
+						table.concat(sampleTexts, "|")
+				)
+			)
+		end
+		if isQuestObjective then
+			return true, true, unitGuid
+		end
+		if type(resolvedSourceIndex) ~= "number" then
+			break
+		end
+		nextSourceIndex = resolvedSourceIndex + 1
+	end
+
+	if not resolvedAnyTooltipLines then
+		if self.IsActiveDelveScenario and self:IsActiveDelveScenario() then
+					PrintOneShotDelveDebug(
+						self,
+						"debugDelveTooltipEmpty",
+						string.format(
+							"tooltip_empty unit=%s guid=%s titleCacheDelves=%s",
+							SafeText(unitToken, "<nil>"),
+							SafeText(unitGuid, "<nil>"),
+							tostring(self.delveObjectiveTitleCache and self.delveObjectiveTitleCache["Delves"] == true)
+					)
+				)
+		end
 		return false, false, unitGuid
 	end
 
-	return true, self:EvaluateTooltipQuestObjectiveLines(tooltipLines), unitGuid
+	return true, false, unitGuid
 end
 
 function QuestTogether:IsQuestObjectiveViaTooltip(unitToken, unitFrame)
@@ -2013,14 +2187,31 @@ function QuestTogether:ResolveNameplateQuestStateForUnitToken(unitToken, unitGui
 	local hasResolvedQuestState, isQuestObjective, resolvedUnitGuid =
 		self:TryResolveNameplateQuestObjectiveState(liveUnitToken, unitFrame, true)
 	if not hasResolvedQuestState then
+		local hasGuidRetryScheduled = false
+		if not IsNonEmptyString(resolvedUnitGuid or unitGuid) then
+			hasGuidRetryScheduled = self:MaybeScheduleNameplateTooltipGuidRetry(
+				liveUnitToken,
+				reason or "ResolveNameplateQuestStateForUnitToken"
+			)
+		end
 		self:ForgetResolvedNameplateQuestState(liveUnitToken)
 		self:HideNameplateIcon(namePlateFrameBase)
-		self:Debugf(
-			"nameplate",
-			"Resolver left quest state unresolved unit=%s reason=%s",
-			SafeText(liveUnitToken, ""),
-			SafeText(reason, "")
-		)
+		if not hasGuidRetryScheduled then
+			PrintOneShotNameplateDebug(
+				self,
+				string.format(
+					"debugResolverUnresolved:%s:%s",
+					SafeText(liveUnitToken, "<nil>"),
+					SafeText(reason or "ResolveNameplateQuestStateForUnitToken", "<nil>")
+				),
+				string.format(
+					"resolver_unresolved unit=%s reason=%s guidRetry=%s",
+					SafeText(liveUnitToken, ""),
+					SafeText(reason, ""),
+					tostring(hasGuidRetryScheduled)
+				)
+			)
+		end
 		return false
 	end
 
@@ -2045,34 +2236,6 @@ function QuestTogether:IsQuestObjectiveUnit(unitToken, unitFrame)
 	end
 
 	return self:IsQuestObjectiveViaTooltip(unitToken, unitFrame)
-end
-
-function QuestTogether:GetLoadedKnownNameplateAddon()
-	if not self.API or not self.API.IsAddOnLoaded then
-		return nil
-	end
-
-	for _, addonName in ipairs(self.knownNameplateAddons or {}) do
-		if self.API.IsAddOnLoaded(addonName) then
-			return addonName
-		end
-	end
-
-	return nil
-end
-
-function QuestTogether:IsKnownNameplateAddonName(addonName)
-	if type(addonName) ~= "string" or addonName == "" then
-		return false
-	end
-
-	for _, candidate in ipairs(self.knownNameplateAddons or {}) do
-		if candidate == addonName then
-			return true
-		end
-	end
-
-	return false
 end
 
 function QuestTogether:IsQuestObjectiveNameplate(unitToken, unitFrame)
@@ -2677,7 +2840,6 @@ function QuestTogether:HideAnnouncementBubble(hostFrame)
 	if not bubble then
 		return
 	end
-	self:Debugf("bubble", "Hiding bubble host=%s", SafeText(unitFrame.unit or unitFrame:GetName() or "<screen>", "<screen>"))
 
 	if bubble.animationGroup and bubble.animationGroup:IsPlaying() then
 		bubble.animationGroup:Stop()
@@ -2688,11 +2850,6 @@ function QuestTogether:HideAnnouncementBubble(hostFrame)
 end
 
 function QuestTogether:RefreshActiveAnnouncementBubbles()
-	local activeCount = 0
-	for _ in pairs(self.nameplateBubbleByUnitFrame) do
-		activeCount = activeCount + 1
-	end
-	self:Debugf("bubble", "Refreshing active bubbles count=%d", activeCount)
 	if self:IsNameplateAugmentationBlockedInCurrentContext() then
 		for _, bubble in pairs(self.nameplateBubbleByUnitFrame) do
 			if bubble then
@@ -2734,17 +2891,11 @@ end
 
 function QuestTogether:GetAnnouncementBubbleHostFrameForUnit(unitToken)
 	if unitToken == "player" then
-		self:Debug("Resolved player bubble host to personal screen anchor", "bubble")
 		return GetAnnouncementBubbleScreenHostFrame()
 	end
 
 	local namePlateFrameBase = self:GetAccessibleNameplateFrameForUnit(unitToken, true)
-	if namePlateFrameBase then
-		self:Debugf("bubble", "Resolved bubble host for unit=%s", SafeText(unitToken, ""))
-		return namePlateFrameBase
-	end
-	self:Debugf("bubble", "No bubble host found for unit=%s", SafeText(unitToken, ""))
-	return nil
+	return namePlateFrameBase
 end
 
 function QuestTogether:TryShowAnnouncementBubbleOnUnitNameplate(unitToken, text, eventType, iconAsset, iconKind)
@@ -2755,7 +2906,6 @@ function QuestTogether:TryShowAnnouncementBubbleOnUnitNameplate(unitToken, text,
 			return false, "Unable to show a bubble on that nameplate."
 		end
 		local unitName = self.API.UnitName and self.API.UnitName(unitToken) or nil
-		self:Debugf("bubble", "Showing bubble on unit=%s text=%s", SafeText(unitToken, ""), SafeText(text, ""))
 		return true, unitName or unitToken
 	end
 
@@ -2774,13 +2924,11 @@ function QuestTogether:ShowAnnouncementBubbleOnNameplate(namePlateFrameBase, tex
 		return false
 	end
 	if self:IsNameplateAugmentationBlockedInCurrentContext() then
-		self:Debug("Skipping announcement bubble in blocked nameplate context", "bubble")
 		return false
 	end
 
 	local message = SafeTrimText(text)
 	if message == "" then
-		self:Debug("Skipping empty bubble message", "bubble")
 		return false
 	end
 
@@ -2874,17 +3022,6 @@ function QuestTogether:ShowAnnouncementBubbleOnNameplate(namePlateFrameBase, tex
 	local contentWidth = iconSize + iconGap + targetTextWidth
 	local bubbleWidth = contentWidth + (inset * 2)
 	local bubbleHeight = contentHeight + (inset * 2)
-	self:Debugf(
-		"bubble",
-		"Render bubble host=%s width=%d height=%d font=%d duration=%.1f text=%s",
-		SafeText(unitFrame.unit or unitFrame:GetName() or "<screen>", "<screen>"),
-		bubbleWidth,
-		bubbleHeight,
-		fontSize,
-		lifetimeSeconds,
-		SafeText(message, "")
-	)
-
 	bubble:ClearAllPoints()
 	bubble:SetPoint("BOTTOM", anchorFrame, "TOP", 0, ANNOUNCEMENT_BUBBLE_Y_OFFSET)
 	bubble:SetSize(bubbleWidth, bubbleHeight)
@@ -3174,11 +3311,24 @@ function QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 	if not hasResolvedQuestState then
 		self:ForgetResolvedNameplateQuestState(unitToken)
 		self:HideNameplateIcon(namePlateFrameBase)
+		if self.IsActiveDelveScenario and self:IsActiveDelveScenario() then
+					PrintOneShotDelveDebug(
+						self,
+						"debugDelveNameplateUnresolved",
+						string.format(
+							"plate_unresolved unit=%s guid=%s schedulingTooltip=true cacheDelves=%s",
+							SafeText(unitToken, "<nil>"),
+							SafeText(self:GetNameplateTooltipScanGuid(unitToken, unitFrame), "<nil>"),
+							tostring(self.delveObjectiveTitleCache and self.delveObjectiveTitleCache["Delves"] == true)
+					)
+			)
+		end
 		if self.ScheduleNameplateTooltipResolution then
 			self:ScheduleNameplateTooltipResolution(unitToken, self:GetNameplateTooltipScanGuid(unitToken, unitFrame), 0, "RefreshNameplateIcon")
 		end
 		return
 	end
+	self:ClearNameplateTooltipResolveRetryCount(unitToken)
 
 	self:ApplyResolvedQuestStateToNameplate(
 		namePlateFrameBase,
@@ -3265,13 +3415,6 @@ function QuestTogether:FindVisiblePlayerNameplateForSender(senderGUID, senderNam
 			end
 		end)
 
-	self:Debugf(
-		"nameplate",
-		"FindVisiblePlayerNameplateForSender guid=%s sender=%s matched=%s",
-		SafeText(senderGUID, ""),
-		SafeText(normalizedSenderName, ""),
-		SafeText(matchedFrame ~= nil, "false")
-	)
 	return matchedFrame
 end
 
@@ -3323,12 +3466,10 @@ function QuestTogether:FindNearbyPlayerUnitTokenForSender(senderGUID, senderName
 
 	for _, unitToken in ipairs(candidateUnits) do
 		if self:DoesUnitTokenMatchSender(unitToken, senderGUID, senderName) then
-			self:Debugf("nameplate", "Nearby player unit token match sender=%s unit=%s", SafeText(senderName, ""), SafeText(unitToken, ""))
 			return unitToken
 		end
 	end
 
-	self:Debugf("nameplate", "No nearby unit token match sender=%s", SafeText(senderName, ""))
 	return nil
 end
 
@@ -3473,6 +3614,7 @@ function QuestTogether:OnNameplateRemoved(unitToken)
 	end
 
 	self:ForgetResolvedNameplateQuestState(unitToken)
+	self:ClearNameplateTooltipResolveRetryCount(unitToken)
 	self.nameplateRefreshPendingByUnitToken[unitToken] = nil
 	self.nameplateRefreshGenerationByUnitToken[unitToken] = nil
 	self.nameplateHealthTintRefreshPendingByUnitToken[unitToken] = nil
@@ -3485,7 +3627,6 @@ end
 
 function QuestTogether:TryInstallNameplateHooks()
 	if self.nameplateHooksInstalled then
-		self:Debug("Nameplate hooks already installed", "nameplate")
 		return
 	end
 
@@ -3499,37 +3640,12 @@ function QuestTogether:TryInstallNameplateHooks()
 		and type(NamePlateDriverMixin.UpdateNamePlateOptions) == "function"
 	then
 		hooksecurefunc(NamePlateDriverMixin, "UpdateNamePlateOptions", function()
-			QuestTogether:Debug("Detected Blizzard nameplate options update; scheduling reapply", "nameplate")
 			QuestTogether:ScheduleFullNameplateRefresh(0.05)
 		end)
 		self.nameplateOptionsHookInstalled = true
 	end
 
-	-- Avoid additional secure hooks into Blizzard's frame-setup path. Event-driven refreshes are
-	-- enough for our icon and announcement bubble visuals.
-	--[[
-	if
-		not self.nameplateApplyFrameOptionsHookInstalled
-		and type(hooksecurefunc) == "function"
-		and type(NamePlateBaseMixin) == "table"
-		and type(NamePlateBaseMixin.ApplyFrameOptions) == "function"
-	then
-		hooksecurefunc(NamePlateBaseMixin, "ApplyFrameOptions", function(namePlateFrameBase)
-			if not QuestTogether.isEnabled or not namePlateFrameBase then
-				return
-			end
-
-			local unitToken = namePlateFrameBase.GetUnit and namePlateFrameBase:GetUnit() or namePlateFrameBase.unitToken
-			if QuestTogether:IsNameplateUnitToken(unitToken) then
-				QuestTogether:ScheduleNameplateRefresh(unitToken)
-			end
-		end)
-		self.nameplateApplyFrameOptionsHookInstalled = true
-	end
-	]]
-
 	self.nameplateHooksInstalled = true
-	self:Debug("Using event-driven nameplate augmentation without shared health-color hooks", "nameplate")
 end
 
 function QuestTogether:HandleNameplateEvent(eventName, ...)
@@ -3565,7 +3681,6 @@ function QuestTogether:HandleNameplateEvent(eventName, ...)
 	elseif eventName == "CVAR_UPDATE" then
 		local cvarName = ...
 		if SafeFindPlain(string.lower(SafeText(cvarName, "")), "nameplate") then
-			self:Debugf("nameplate", "Refreshing nameplate augmentation after CVar change=%s", SafeText(cvarName, ""))
 			self:ScheduleFullNameplateRefresh(0.05)
 		end
 	elseif
@@ -3600,15 +3715,12 @@ function QuestTogether:EnableNameplateAugmentation()
 		local ok = pcall(addon.nameplateEventFrame.RegisterEvent, addon.nameplateEventFrame, eventName)
 		if ok then
 			addon.nameplateRegisteredEvents[eventName] = true
-			addon:Debugf("nameplate", "Registered augmentation event=%s", SafeText(eventName, ""))
 		else
 			addon.nameplateRegisteredEvents[eventName] = nil
-			addon:Debugf("nameplate", "Failed to register augmentation event=%s", SafeText(eventName, ""))
 		end
 	end
 
 	self:TryInstallNameplateHooks()
-	self:Debug("Enabling nameplate augmentation events", "nameplate")
 	RegisterNameplateEvent(self, "NAME_PLATE_UNIT_ADDED")
 	RegisterNameplateEvent(self, "NAME_PLATE_UNIT_REMOVED")
 	RegisterNameplateEvent(self, "QUEST_LOG_UPDATE")
@@ -3646,12 +3758,10 @@ function QuestTogether:DisableNameplateAugmentation()
 	if not self.nameplateEventFrame then
 		return
 	end
-	self:Debug("Disabling nameplate augmentation", "nameplate")
 
 	for eventName in pairs(self.nameplateRegisteredEvents or {}) do
 		-- Unregister should never break disable flow if an event was already invalidated.
 		pcall(self.nameplateEventFrame.UnregisterEvent, self.nameplateEventFrame, eventName)
-		self:Debugf("nameplate", "Unregistered augmentation event=%s", SafeText(eventName, ""))
 	end
 	if self.nameplateRegisteredEvents then
 		wipe(self.nameplateRegisteredEvents)

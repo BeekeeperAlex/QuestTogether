@@ -4,7 +4,6 @@ QuestTogether Options Panel (Esc > Options > AddOns)
 
 local QuestTogether = _G.QuestTogether
 
-QuestTogether.optionControls = QuestTogether.optionControls or {}
 QuestTogether.announcementControls = QuestTogether.announcementControls or {}
 QuestTogether.whereToAnnounceControls = QuestTogether.whereToAnnounceControls or {}
 QuestTogether.questPlateControls = QuestTogether.questPlateControls or {}
@@ -199,12 +198,6 @@ local function CreateCheckbox(parent, optionKey, labelText, tooltipText, x, y)
 	end
 
 	checkbox:SetScript("OnClick", function(self)
-		QuestTogether:Debugf(
-			"options",
-			"Checkbox clicked key=%s checked=%s",
-			SafeText(optionKey, ""),
-			SafeText(self:GetChecked() == true, "false")
-		)
 		QuestTogether:SetOption(optionKey, self:GetChecked() == true)
 		QuestTogether:RefreshOptionsWindow()
 	end)
@@ -278,14 +271,6 @@ local function CreateColorSwatch(parent, optionKey, labelText, tooltipText, fall
 	end
 
 	local function SetColorOption(r, g, b)
-		QuestTogether:Debugf(
-			"options",
-			"Color option changed key=%s r=%.3f g=%.3f b=%.3f",
-			SafeText(optionKey, ""),
-			QuestTogether:SafeToNumber(r) or 0,
-			QuestTogether:SafeToNumber(g) or 0,
-			QuestTogether:SafeToNumber(b) or 0
-		)
 		QuestTogether:SetOption(optionKey, {
 			r = ClampColorComponent(r, fallbackColor.r),
 			g = ClampColorComponent(g, fallbackColor.g),
@@ -372,18 +357,12 @@ local function CreateOptionDropdown(parent, titleText, tooltipText, x, y, width,
 		width,
 		function(_, level)
 			for _, value in ipairs(values) do
-				local info = UIDropDownMenu_CreateInfo()
-				info.text = getLabel(value)
-				info.func = function()
-					QuestTogether:Debugf(
-						"options",
-						"Dropdown selected key=%s value=%s",
-						SafeText(optionKey, ""),
-						SafeText(value, "")
-					)
-					QuestTogether:SetOption(optionKey, value)
-					QuestTogether:RefreshOptionsWindow()
-					CloseDropDownMenus()
+					local info = UIDropDownMenu_CreateInfo()
+					info.text = getLabel(value)
+					info.func = function()
+						QuestTogether:SetOption(optionKey, value)
+						QuestTogether:RefreshOptionsWindow()
+						CloseDropDownMenus()
 				end
 				info.checked = currentValueGetter() == value
 				UIDropDownMenu_AddButton(info, level)
@@ -471,7 +450,6 @@ local CHECKBOX_OPTION_KEYS = {
 	"nameplateQuestHealthColorEnabled",
 	"emoteOnQuestCompletion",
 	"emoteOnNearbyPlayerQuestCompletion",
-	"debugMode",
 }
 
 local function RefreshCheckboxOptions(controls)
@@ -696,8 +674,6 @@ local function RefreshQuestPlatesPreview(controls)
 end
 
 function QuestTogether:RefreshOptionsWindow()
-	self:Debug("Refreshing options window", "options")
-
 	self:RefreshHomeWindow()
 	self:RefreshAnnouncementsWindow()
 	self:RefreshWhereToAnnounceWindow()
@@ -1323,7 +1299,6 @@ function QuestTogether:InitializeWhereToAnnounceWindow(parentCategory)
 	openHudEditMode:SetPoint("TOPLEFT", content, "TOPLEFT", 36, -358)
 	openHudEditMode:SetText("Open HUD Edit Mode")
 	openHudEditMode:SetScript("OnClick", function()
-		QuestTogether:Debug("Open HUD Edit Mode button clicked", "options")
 		if not QuestTogether:OpenHudEditMode() then
 			QuestTogether:Print("HUD Edit Mode is unavailable right now.")
 		end
@@ -1346,8 +1321,6 @@ function QuestTogether:InitializeWhereToAnnounceWindow(parentCategory)
 		openHudEditMode = openHudEditMode,
 		personalBubbleEditHint = personalBubbleEditHint,
 	}
-	-- Keep legacy field wired for code that still references optionControls.
-	self.optionControls = self.whereToAnnounceControls
 	self.whereToAnnounceFrame = frame
 
 	frame:SetScript("OnShow", function()
@@ -1412,7 +1385,6 @@ function QuestTogether:InitializeQuestPlatesWindow(parentCategory)
 	resetNameplateQuestHealthColor:SetScript("OnClick", function()
 		local defaults = QuestTogether.DEFAULTS.profile.nameplateQuestHealthColor
 			or QuestTogether.NAMEPLATE_QUEST_HEALTH_COLOR
-		QuestTogether:Debug("Resetting nameplate quest health color to default", "options")
 		QuestTogether:SetOption("nameplateQuestHealthColor", {
 			r = defaults.r,
 			g = defaults.g,
@@ -1614,30 +1586,25 @@ function QuestTogether:InitializeMiscWindow(parentCategory)
 		16,
 		-110
 	)
-	local debugMode = CreateCheckbox(content, "debugMode", "Debug Mode", "Print debug output in chat.", 16, -138)
-
-	local testButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
-	testButton:SetSize(180, 24)
-	testButton:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -180)
-	testButton:SetText("Run In-Game Tests")
-	testButton:SetScript("OnClick", function()
-		QuestTogether:Debug("Run In-Game Tests button clicked", "options")
-		QuestTogether:RunTests()
+	local debugButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+	debugButton:SetSize(180, 24)
+	debugButton:SetPoint("TOPLEFT", content, "TOPLEFT", 16, -146)
+	debugButton:SetText("Open Debug Window")
+	debugButton:SetScript("OnClick", function()
+		QuestTogether:ShowDebugWindow()
 	end)
 
 	local scanButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
 	scanButton:SetSize(180, 24)
-	scanButton:SetPoint("LEFT", testButton, "RIGHT", 10, 0)
+	scanButton:SetPoint("LEFT", debugButton, "RIGHT", 10, 0)
 	scanButton:SetText("Rescan Quest Log")
 	scanButton:SetScript("OnClick", function()
-		QuestTogether:Debug("Rescan Quest Log button clicked", "options")
 		QuestTogether:ScanQuestLog()
 	end)
 
 	self.miscControls = {
 		emoteOnQuestCompletion = emoteOnQuestCompletion,
 		emoteOnNearbyPlayerQuestCompletion = emoteOnNearbyPlayerQuestCompletion,
-		debugMode = debugMode,
 	}
 	self.miscFrame = frame
 
@@ -1659,7 +1626,6 @@ function QuestTogether:OpenOptionsWindow()
 		return
 	end
 
-	self:Debug("Opening addon options category", "options")
 	Settings.OpenToCategory(self.optionsCategory:GetID())
 end
 
@@ -1667,8 +1633,6 @@ function QuestTogether:InitializeOptionsWindow()
 	if self.optionsFrame then
 		return
 	end
-	self:Debug("Initializing options window", "options")
-
 	local frame = CreateFrame("Frame", "QuestTogetherHomePanel")
 	frame.name = "QuestTogether"
 

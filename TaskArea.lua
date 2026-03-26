@@ -296,42 +296,20 @@ function QuestTogether:RefreshTaskAreaState(taskType, shouldAnnounce)
 		end
 	end
 
-	self:Debugf(
-		"quest",
-		"RefreshTaskAreaState type=%s announce=%s prev=%d curr=%d",
-		SafeText(taskType, ""),
-		SafeText(shouldAnnounce, "false"),
-		CountKeys(previousState),
-		CountKeys(currentState)
-	)
 	for questId, questTitle in pairs(currentState) do
 		if not previousState[questId] and shouldAnnounce then
-			self:Debugf(
-				"quest",
-				"%s area entered questId=%s title=%s",
-				SafeText(config.debugLabel, ""),
-				SafeText(questId, "?"),
-				SafeText(questTitle, "Unknown")
-			)
 			self:PublishAnnouncementEvent(config.enterEvent, config.enterPrefix .. SafeText(questTitle, "Unknown"), questId)
 		end
 	end
 
 	for questId, previousTitle in pairs(previousState) do
-		if not currentState[questId] then
-			local wasCompleted = self.questsCompleted[questId] ~= nil
-			if shouldAnnounce and not wasCompleted then
-				local questTitle = previousTitle or self:GetQuestTitle(questId)
-				self:Debugf(
-					"quest",
-					"%s area left questId=%s title=%s",
-					SafeText(config.debugLabel, ""),
-					SafeText(questId, "?"),
-					SafeText(questTitle, "Unknown")
-				)
-				self:PublishAnnouncementEvent(config.leftEvent, config.leftPrefix .. SafeText(questTitle, "Unknown"), questId)
+			if not currentState[questId] then
+				local wasCompleted = self.questsCompleted[questId] ~= nil
+				if shouldAnnounce and not wasCompleted then
+					local questTitle = previousTitle or self:GetQuestTitle(questId)
+					self:PublishAnnouncementEvent(config.leftEvent, config.leftPrefix .. SafeText(questTitle, "Unknown"), questId)
+				end
 			end
-		end
 	end
 
 end
@@ -362,7 +340,6 @@ function QuestTogether:RefreshTaskAreaStates(shouldAnnounce)
 		if shouldAnnounce then
 			self:SetRuntimeFlag("pendingScheduledTaskAreaRefreshShouldAnnounce", true)
 		end
-		self:Debugf("quest", "Deferring task area refresh through runtime gate announce=%s", SafeText(shouldAnnounce, "false"))
 		self:ScheduleTaskAreaRefresh(shouldAnnounce)
 		return false
 	end

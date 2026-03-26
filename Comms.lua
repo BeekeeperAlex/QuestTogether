@@ -735,14 +735,6 @@ function QuestTogether:SendWireMessageToAnnouncementRoutes(wireMessage, debugCon
 		if route.requiresChannelJoin and not self:EnsureAnnouncementChannelJoined() then
 			self:Debugf("comms", "Skipping %s route=%s because channel join failed", contextLabel, route.distribution or "")
 		else
-			self:Debugf(
-				"comms",
-				"Sending %s distribution=%s target=%s bytes=%d",
-				contextLabel,
-				SafeAddonString(self, route.distribution or "", ""),
-				SafeAddonString(self, route.target or "", ""),
-				#wireMessage
-			)
 			self.API.SendAddonMessage(self.commPrefix, wireMessage, route.distribution, route.target)
 			sentCount = sentCount + 1
 		end
@@ -1249,7 +1241,6 @@ end
 
 function QuestTogether:SendAnnouncementEvent(eventType, text, questId, extraData)
 	if not self.isEnabled then
-		self:Debugf("comms", "Skipping announcement send while disabled eventType=%s", SafeAddonString(self, eventType, ""))
 		return false
 	end
 
@@ -1259,7 +1250,6 @@ function QuestTogether:SendAnnouncementEvent(eventType, text, questId, extraData
 		return false
 	end
 
-	self:DebugState("comms", "localAnnouncement", eventData)
 	return self:SendAnnouncementWireEvent(eventData)
 end
 
@@ -1325,13 +1315,10 @@ end
 
 function QuestTogether:SendAnnouncementWireEvent(eventData)
 	if not self.isEnabled or type(eventData) ~= "table" then
-		self:DebugState("comms", "Rejected wire event", eventData)
 		return false
 	end
-	local originalEventData = eventData
 	eventData = self:SanitizeAnnouncementEventData(eventData)
 	if not eventData then
-		self:DebugState("comms", "Rejected wire event", originalEventData)
 		return false
 	end
 
@@ -1385,12 +1372,6 @@ function QuestTogether:SendPingResponse(requestId)
 	end
 
 	local wireMessage = self:SerializeWireMessage(PING_RESPONSE_COMMAND, self:EncodePingResponsePayload(responseData))
-	self:Debugf(
-		"comms",
-		"Sending ping response id=%s sender=%s",
-		SafeAddonString(self, requestId, ""),
-		SafeAddonString(self, responseData.senderName, "")
-	)
 	return self:SendWireMessageToAnnouncementRoutes(
 		wireMessage,
 		"ping response id=" .. SafeAddonString(self, requestId, "")
@@ -1430,7 +1411,6 @@ function QuestTogether:SendBubbleAnnouncementTest(text, senderName)
 		if not self.API.UnitIsPlayer or not self.API.UnitIsPlayer("target") then
 			return false, "Your target must be a player."
 		end
-		self:Debug("bubbletest using current target", "comms")
 
 		eventData = self:BuildAnnouncementEventForUnit("target", "QUEST_PROGRESS", text)
 		if not eventData then
@@ -1450,12 +1430,6 @@ function QuestTogether:SendBubbleAnnouncementTest(text, senderName)
 		if not unitToken or unitToken == "" then
 			return false, "No visible nearby player matched that name."
 		end
-		self:Debugf(
-			"comms",
-			"bubbletest resolved explicit sender=%s unitToken=%s",
-			SafeAddonString(self, trimmedSenderName, ""),
-			SafeAddonString(self, unitToken, "")
-		)
 
 		eventData = self:BuildAnnouncementEventForUnit(unitToken, "QUEST_PROGRESS", text)
 		if not eventData then
@@ -1500,7 +1474,6 @@ function QuestTogether:HandleAnnouncementEvent(eventData, isLocal)
 	end
 	local allowedByOption = self:ShouldDisplayAnnouncementType(eventData.eventType)
 	if not allowedByOption then
-		self:Debugf("comms", "Filtered eventType=%s by local display settings", SafeAddonString(self, eventData.eventType, ""))
 		return false
 	end
 
@@ -1532,33 +1505,14 @@ function QuestTogether:HandleAnnouncementEvent(eventData, isLocal)
 		and self:GetOption("showChatLogs")
 		and self:GetOption("devLogAllAnnouncements")
 	local allowRemoteDisplay = isLocal or self:ShouldShowAnnouncementsForRemoteSender(senderName, hasNearbySignal)
-	self:Debugf(
-		"comms",
-		"HandleAnnouncement eventType=%s sender=%s isLocal=%s grouped=%s nearbyNameplate=%s nearbyUnit=%s nearbyLocation=%s forceLogs=%s",
-		SafeAddonString(self, eventData.eventType, ""),
-		SafeAddonString(self, senderName, ""),
-		SafeAddonString(self, isLocal, "false"),
-		SafeAddonString(self, isGrouped, "false"),
-		SafeAddonString(self, hasNearbyNameplate, "false"),
-		SafeAddonString(self, nearbyUnitToken, ""),
-		SafeAddonString(self, nearbyByLocation, "false"),
-		SafeAddonString(self, forceAllChatLogs, "false")
-	)
 
 	if not allowRemoteDisplay and not forceAllChatLogs then
-		self:Debugf("comms", "Filtered remote sender=%s by showProgressFor scope", SafeAddonString(self, senderName, ""))
 		return false
 	end
 
 	if self:GetOption("showChatLogs") then
 		local shouldPrint = isLocal or isGrouped or hasNearbySignal or forceAllChatLogs
 		if shouldPrint then
-			self:Debugf(
-				"comms",
-				"Printing chat log sender=%s class=%s",
-				SafeAddonString(self, senderName, ""),
-				SafeAddonString(self, classFile, "")
-			)
 			self:PrintConsoleAnnouncement(
 				eventData.text,
 				senderName,
@@ -1568,11 +1522,7 @@ function QuestTogether:HandleAnnouncementEvent(eventData, isLocal)
 				eventData.iconKind,
 				eventData
 			)
-		else
-			self:Debugf("comms", "Skipped chat log sender=%s reason=no nearby/group signal", SafeAddonString(self, senderName, ""))
 		end
-	else
-		self:Debug("Chat log display disabled", "comms")
 	end
 
 	if
@@ -1580,25 +1530,17 @@ function QuestTogether:HandleAnnouncementEvent(eventData, isLocal)
 		and allowRemoteDisplay
 		and hasNearbySignal
 		and self:ShouldPlayRemoteEmoteForAnnouncement(eventData)
-	then
-		local emoteTarget = nearbyUnitToken
-		if not emoteTarget and hasNearbyNameplate and nearbyNameplate and nearbyNameplate.GetUnit then
-			emoteTarget = nearbyNameplate:GetUnit()
+		then
+			local emoteTarget = nearbyUnitToken
+			if not emoteTarget and hasNearbyNameplate and nearbyNameplate and nearbyNameplate.GetUnit then
+				emoteTarget = nearbyNameplate:GetUnit()
+			end
+			self:PlayRemoteCompletionEmote(eventData, emoteTarget, senderName)
 		end
-		if self:PlayRemoteCompletionEmote(eventData, emoteTarget, senderName) then
-			self:Debugf(
-				"comms",
-				"Played remote completion emote sender=%s token=%s",
-				SafeAddonString(self, senderName, ""),
-				SafeAddonString(self, eventData.emoteToken, "")
-			)
-		end
-	end
 
 	if self:GetOption("showChatBubbles") then
 		if isLocal then
 			if not self:GetOption("hideMyOwnChatBubbles") and self.ShowAnnouncementBubbleOnUnitNameplate then
-				self:Debug("Showing local personal bubble", "bubble")
 				self:ShowAnnouncementBubbleOnUnitNameplate(
 					"player",
 					eventData.text,
@@ -1606,11 +1548,8 @@ function QuestTogether:HandleAnnouncementEvent(eventData, isLocal)
 					eventData.iconAsset,
 					eventData.iconKind
 				)
-			else
-				self:Debug("Skipped local personal bubble due to hideMyOwnChatBubbles or unavailable renderer", "bubble")
 			end
 		elseif allowRemoteDisplay and hasNearbyNameplate and self.ShowAnnouncementBubbleOnNameplate then
-			self:Debugf("bubble", "Showing remote nearby bubble sender=%s", SafeAddonString(self, senderName, ""))
 			self:ShowAnnouncementBubbleOnNameplate(
 				nearbyNameplate,
 				eventData.text,
@@ -1618,11 +1557,7 @@ function QuestTogether:HandleAnnouncementEvent(eventData, isLocal)
 				eventData.iconAsset,
 				eventData.iconKind
 			)
-		else
-			self:Debugf("bubble", "Skipped remote bubble sender=%s reason=no nearby nameplate", SafeAddonString(self, senderName, ""))
 		end
-	else
-		self:Debug("Chat bubble display disabled", "bubble")
 	end
 
 	return true
@@ -1630,7 +1565,6 @@ end
 
 function QuestTogether:PublishAnnouncementEvent(eventType, text, questId, extraData)
 	if self.API.UnitIsDeadOrGhost and self.API.UnitIsDeadOrGhost("player") then
-		self:Debugf("comms", "PublishAnnouncementEvent suppressed while dead eventType=%s", SafeAddonString(self, eventType, ""))
 		return false
 	end
 
@@ -1640,14 +1574,8 @@ function QuestTogether:PublishAnnouncementEvent(eventType, text, questId, extraD
 		return false
 	end
 
-	self:DebugState("comms", "publishAnnouncement", eventData)
 	self:SendAnnouncementEvent(eventType, text, questId, extraData)
 	if self.suppressLocalAnnouncementDisplayDuringTests then
-		self:Debugf(
-			"comms",
-			"PublishAnnouncementEvent suppressed local display during tests eventType=%s",
-			SafeAddonString(self, eventType, "")
-		)
 		return true
 	end
 	self:HandleAnnouncementEvent(eventData, true)
@@ -1663,25 +1591,13 @@ function QuestTogether:OnCommReceived(prefix, message, channel, sender, localID,
 		return
 	end
 	local safeMessage = SafeAddonString(self, message, "")
-	local messageLength = #safeMessage
-	self:Debugf(
-		"comms",
-		"Received addon message channel=%s sender=%s name=%s bytes=%d",
-		SafeDebugString(channel),
-		SafeDebugString(sender),
-		SafeDebugString(name),
-		messageLength
-	)
 	if self:IsSelfSender(sender) then
-		self:Debugf("comms", "Ignoring self-sent addon message sender=%s", SafeDebugString(sender))
 		return
 	end
 	if self.IsIgnoredPlayerName and self:IsIgnoredPlayerName(self:NormalizeMemberName(sender) or sender) then
-		self:Debugf("comms", "Ignoring addon message from ignored sender=%s", SafeDebugString(sender))
 		return
 	end
 	if not self:IsAnnouncementChannelEvent(channel, localID, name) then
-		self:Debugf("comms", "Ignoring addon message outside announcement channel sender=%s", SafeDebugString(sender))
 		return
 	end
 
@@ -1691,12 +1607,6 @@ function QuestTogether:OnCommReceived(prefix, message, channel, sender, localID,
 		return
 	end
 	if self:ShouldSuppressDuplicateCommMessage(sender, safeMessage) then
-		self:Debugf(
-			"comms",
-			"Suppressed duplicate comm command=%s sender=%s",
-			SafeAddonString(self, command, ""),
-			SafeDebugString(sender)
-		)
 		return
 	end
 
@@ -1711,7 +1621,6 @@ function QuestTogether:OnCommReceived(prefix, message, channel, sender, localID,
 			eventData.senderName = self:NormalizeMemberName(sender) or sender
 		end
 
-		self:DebugState("comms", "receivedAnnouncement", eventData)
 		self:HandleAnnouncementEvent(eventData, false)
 		return
 	end
@@ -1766,5 +1675,4 @@ function QuestTogether:OnCommReceived(prefix, message, channel, sender, localID,
 		return
 	end
 
-	self:Debugf("comms", "Ignoring addon command=%s", SafeAddonString(self, command, ""))
 end

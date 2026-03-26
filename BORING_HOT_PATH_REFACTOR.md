@@ -78,6 +78,8 @@
 - Removed the explicit legacy runtime alias-sync layer from `HotPathState.lua`; runtime store tables now retain identity across resets and the remaining compatibility references stay attached without a mirror pass.
 - Added a small shared debounce to `task_area_refresh` so noisy map/blob/quest events coalesce through the scheduler instead of rebuilding immediately on every event.
 - Tightened quest-compare/shareable status reads so they go through the shared quest-status/shareability policy instead of calling live APIs directly from comms code.
+- Added `DelveObjectives.lua` as a first-class scenario-objective subsystem. Active Delve objective state now comes from sanitized `C_ScenarioInfo` snapshots plus Delve header detection, feeds a Delve title cache for nameplate matching, and publishes diff-based Delve announcements through the existing announcement pipeline.
+- Extended default-nameplate objective matching to consult Delve title cache entries and carved active Delves out of the instance-only nameplate block so Delve objective mobs can use the existing quest plate visuals without reopening map/task taint paths.
 
 ## Open Risks
 - Static validation is clean, and one live `/qt test` pass already exposed and validated follow-up fixes, but another in-game `/qt test` and combat/world-map regression pass is still needed after the latest patches.
