@@ -947,6 +947,183 @@ QuestTogether.API = QuestTogether.API or {
 			end
 			return false
 		end,
+		GetQuestOfferAnnouncementIconInfo = function(questID)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID then
+				return nil, nil
+			end
+			if not QuestUtil or type(QuestUtil.GetQuestIconOfferForQuestID) ~= "function" then
+				return nil, nil
+			end
+
+			local ok, iconAsset, isAtlas = pcall(QuestUtil.GetQuestIconOfferForQuestID, numericQuestID)
+			if not ok then
+				return nil, nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue then
+				if QuestTogether:IsSecretValue(iconAsset) then
+					return nil, nil
+				end
+				if QuestTogether:IsSecretValue(isAtlas) then
+					return nil, nil
+				end
+			end
+			if type(iconAsset) ~= "string" or iconAsset == "" then
+				return nil, nil
+			end
+
+			return iconAsset, isAtlas == true and "atlas" or "texture"
+		end,
+		GetQuestActiveAnnouncementIconInfo = function(questID, isComplete)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID then
+				return nil, nil
+			end
+			if not QuestUtil or type(QuestUtil.GetQuestIconActiveForQuestID) ~= "function" then
+				return nil, nil
+			end
+
+			local ok, iconAsset, isAtlas =
+				pcall(QuestUtil.GetQuestIconActiveForQuestID, numericQuestID, isComplete == true)
+			if not ok then
+				return nil, nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue then
+				if QuestTogether:IsSecretValue(iconAsset) then
+					return nil, nil
+				end
+				if QuestTogether:IsSecretValue(isAtlas) then
+					return nil, nil
+				end
+			end
+			if type(iconAsset) ~= "string" or iconAsset == "" then
+				return nil, nil
+			end
+
+			return iconAsset, isAtlas == true and "atlas" or "texture"
+		end,
+		GetQuestTagInfo = function(questID)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID then
+				return nil
+			end
+			if not (C_QuestLog and C_QuestLog.GetQuestTagInfo) then
+				return nil
+			end
+
+			local ok, tagInfo = pcall(C_QuestLog.GetQuestTagInfo, numericQuestID)
+			if not ok or type(tagInfo) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(tagInfo) then
+				return nil
+			end
+
+			local function SanitizeNumber(value)
+				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(value) then
+					return nil
+				end
+				local numericValue = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(value) or nil
+				if numericValue == nil then
+					return nil
+				end
+				return math.floor(numericValue + 0.5)
+			end
+
+			local function SanitizeBoolean(value)
+				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(value) then
+					return nil
+				end
+				if type(value) == "boolean" then
+					return value
+				end
+				local numericValue = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(value) or nil
+				if numericValue == nil then
+					return nil
+				end
+				return numericValue ~= 0
+			end
+
+			return {
+				tagID = SanitizeNumber(tagInfo.tagID),
+				worldQuestType = SanitizeNumber(tagInfo.worldQuestType),
+				tradeskillLineID = SanitizeNumber(tagInfo.tradeskillLineID),
+				quality = SanitizeNumber(tagInfo.quality),
+				isElite = SanitizeBoolean(tagInfo.isElite),
+			}
+		end,
+		GetQuestDetailsThemePoiIcon = function(questID)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID then
+				return nil
+			end
+			if not (C_QuestLog and C_QuestLog.GetQuestDetailsTheme) then
+				return nil
+			end
+
+			local ok, theme = pcall(C_QuestLog.GetQuestDetailsTheme, numericQuestID)
+			if not ok or type(theme) ~= "table" then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(theme) then
+				return nil
+			end
+
+			local poiIcon = theme.poiIcon
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(poiIcon) then
+				return nil
+			end
+			if type(poiIcon) ~= "string" or poiIcon == "" then
+				return nil
+			end
+
+			return poiIcon
+		end,
+		GetQuestTagAtlas = function(tagID, worldQuestType)
+			if type(QuestUtils_GetQuestTagAtlas) ~= "function" then
+				return nil
+			end
+
+			local ok, atlas = pcall(QuestUtils_GetQuestTagAtlas, tagID, worldQuestType)
+			if not ok then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(atlas) then
+				return nil
+			end
+			if type(atlas) ~= "string" or atlas == "" then
+				return nil
+			end
+
+			return atlas
+		end,
+		GetWorldQuestAtlasInfo = function(questID, tagInfo, inProgress)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID or type(tagInfo) ~= "table" then
+				return nil
+			end
+			if not (QuestUtil and type(QuestUtil.GetWorldQuestAtlasInfo) == "function") then
+				return nil
+			end
+
+			local ok, atlas = pcall(QuestUtil.GetWorldQuestAtlasInfo, numericQuestID, tagInfo, inProgress == true)
+			if not ok then
+				return nil
+			end
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(atlas) then
+				return nil
+			end
+			if type(atlas) ~= "string" or atlas == "" then
+				return nil
+			end
+
+			return atlas
+		end,
 		IsQuestOnMap = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
 				or nil
@@ -2941,6 +3118,21 @@ function QuestTogether:EnsureQuestSnapshotStore()
 end
 
 function QuestTogether:GetQuestStateAnnouncementIconInfo(eventType, questId)
+	local numericQuestId = self:NormalizeQuestID(questId)
+	if numericQuestId and self.API then
+		local iconAsset = nil
+		local iconKind = nil
+		if eventType == "QUEST_ACCEPTED" and self.API.GetQuestOfferAnnouncementIconInfo then
+			iconAsset, iconKind = self.API.GetQuestOfferAnnouncementIconInfo(numericQuestId)
+		elseif self.API.GetQuestActiveAnnouncementIconInfo then
+			local useCompleteIcon = eventType == "QUEST_COMPLETED" or eventType == "QUEST_READY_TO_TURN_IN"
+			iconAsset, iconKind = self.API.GetQuestActiveAnnouncementIconInfo(numericQuestId, useCompleteIcon)
+		end
+		if type(iconAsset) == "string" and iconAsset ~= "" then
+			return iconAsset, iconKind
+		end
+	end
+
 	local texturePath = self.NAMEPLATE_QUEST_ICON_TEXTURE
 	if type(texturePath) ~= "string" or texturePath == "" then
 		return nil, nil
@@ -2950,10 +3142,61 @@ function QuestTogether:GetQuestStateAnnouncementIconInfo(eventType, questId)
 end
 
 function QuestTogether:GetWorldQuestAnnouncementIconInfo(questId)
+	local numericQuestId = self:NormalizeQuestID(questId)
+	if not numericQuestId then
+		return "worldquest-icon", "atlas"
+	end
+
+	local tagInfo = self.API and self.API.GetQuestTagInfo and self.API.GetQuestTagInfo(numericQuestId) or nil
+	if type(tagInfo) == "table" and self.API and self.API.GetWorldQuestAtlasInfo then
+		local atlas = self.API.GetWorldQuestAtlasInfo(numericQuestId, tagInfo, false)
+		if type(atlas) == "string" and atlas ~= "" then
+			return atlas, "atlas"
+		end
+	end
+
+	local poiIcon = self.API and self.API.GetQuestDetailsThemePoiIcon and self.API.GetQuestDetailsThemePoiIcon(numericQuestId)
+		or nil
+	if type(poiIcon) == "string" and poiIcon ~= "" then
+		return poiIcon, "atlas"
+	end
+
 	return "worldquest-icon", "atlas"
 end
 
 function QuestTogether:GetBonusObjectiveAnnouncementIconInfo(eventType, questId)
+	local numericQuestId = self:NormalizeQuestID(questId)
+	if numericQuestId then
+		local tagInfo = self.API and self.API.GetQuestTagInfo and self.API.GetQuestTagInfo(numericQuestId) or nil
+		if type(tagInfo) == "table" and self.API and self.API.GetQuestTagAtlas then
+			local atlas = self.API.GetQuestTagAtlas(tagInfo.tagID, tagInfo.worldQuestType)
+			if type(atlas) == "string" and atlas ~= "" then
+				return atlas, "atlas"
+			end
+		end
+
+		local poiIcon = self.API and self.API.GetQuestDetailsThemePoiIcon
+				and self.API.GetQuestDetailsThemePoiIcon(numericQuestId)
+			or nil
+		if type(poiIcon) == "string" and poiIcon ~= "" then
+			return poiIcon, "atlas"
+		end
+	end
+
+	local questStateEventType = eventType
+	if eventType == "BONUS_OBJECTIVE_ENTERED" then
+		questStateEventType = "QUEST_ACCEPTED"
+	elseif eventType == "BONUS_OBJECTIVE_PROGRESS" or eventType == "BONUS_OBJECTIVE_LEFT" then
+		questStateEventType = "QUEST_PROGRESS"
+	elseif eventType == "BONUS_OBJECTIVE_COMPLETED" then
+		questStateEventType = "QUEST_COMPLETED"
+	end
+
+	local asset, kind = self:GetQuestStateAnnouncementIconInfo(questStateEventType, numericQuestId)
+	if type(asset) == "string" and asset ~= "" then
+		return asset, kind
+	end
+
 	return "Bonus-Objective-Star", "atlas"
 end
 
@@ -5569,7 +5812,6 @@ function QuestTogether:WatchQuest(questId, questInfo)
 			or false,
 		isReadyForTurnIn = initialStatusState and initialStatusState.isReadyForTurnIn == true or false,
 	}
-	self:RefreshTrackedQuestAnnouncementIcon(numericQuestId, tracker[numericQuestId])
 
 	if not questLogIndex then
 		return

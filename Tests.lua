@@ -522,6 +522,65 @@ QuestTogether:RegisterTest("WatchQuest seeds ready-to-turn-in baseline from live
 	AssertTrue(tracker[12345].isReadyForTurnIn)
 end)
 
+QuestTogether:RegisterTest("WatchQuest does not refresh announcement icon metadata during tracker sync", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestLogIndexForQuestID = function(questId)
+			AssertEquals(questId, 12345)
+			return nil
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "RefreshTrackedQuestAnnouncementIcon", function()
+		error("WatchQuest should not refresh announcement icon metadata during tracker sync")
+	end, function()
+		QuestTogether:WatchQuest(12345, {
+			title = "Any Quest",
+		})
+	end)
+end)
+
+QuestTogether:RegisterTest("UNIT_QUEST_LOG_CHANGED does not refresh announcement icon metadata during status sync", function()
+	local tracker = QuestTogether:GetPlayerTracker()
+	tracker[12345] = {
+		title = "Any Quest",
+		objectives = {},
+		objectiveValues = {},
+		isComplete = false,
+		isReadyForTurnIn = false,
+	}
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestLogIndexForQuestID = function(questId)
+			AssertEquals(questId, 12345)
+			return 1
+		end,
+		GetNumQuestLeaderBoards = function(questLogIndex)
+			AssertEquals(questLogIndex, 1)
+			return 0
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "QueueQuestLogTask", function(_, taskFn)
+		taskFn()
+	end, function()
+		WithPatchedMethod(QuestTogether, "GetTrackedQuestStatusState", function(_, questId, allowLiveFallback)
+			AssertEquals(questId, 12345)
+			AssertTrue(allowLiveFallback)
+			return {
+				isComplete = true,
+				isReadyForTurnIn = true,
+			}
+		end, function()
+			WithPatchedMethod(QuestTogether, "RefreshTrackedQuestAnnouncementIcon", function()
+				error("UNIT_QUEST_LOG_CHANGED should not refresh announcement icon metadata during status sync")
+			end, function()
+				WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function() end, function()
+					QuestTogether:UNIT_QUEST_LOG_CHANGED(nil, "player")
+				end)
+			end)
+		end)
+	end)
+end)
+
 QuestTogether:RegisterTest("Safe conversions short-circuit values marked secret", function()
 	WithPatchedMethod(QuestTogether, "IsSecretValue", function(_, value)
 		return value == "secret-text" or value == 99
@@ -1380,6 +1439,45 @@ QuestTogether:RegisterTest("clearing tracked world quest state preserves prior a
 	AssertTrue(string.find(events[1].text, "Tracked World Quest", 1, true) ~= nil)
 end)
 
+QuestTogether:RegisterTest("clearing tracked completed world quest state suppresses left announcement diff", function()
+	local events = {}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 0
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+
+	local worldState = QuestTogether:GetTaskAreaStateStore("world")
+	worldState[66667] = "Completed World Quest"
+	QuestTogether:GetPlayerTracker()[66667] = {
+		title = "Completed World Quest",
+		taskAnnouncementType = "world",
+	}
+	QuestTogether.questsCompleted[66667] = {
+		questId = 66667,
+		title = "Completed World Quest",
+		taskAnnouncementType = "world",
+	}
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		QuestTogether:ClearTrackedQuestState(66667)
+	end)
+
+	AssertEquals(#events, 0)
+	AssertEquals(QuestTogether.questsCompleted[66667], nil)
+end)
+
 QuestTogether:RegisterTest("task area refresh reacts to live bonus area changes across repeated refreshes", function()
 	local events = {}
 	local liveQuestInfo = {
@@ -1495,6 +1593,45 @@ QuestTogether:RegisterTest("clearing tracked bonus objective state preserves pri
 	AssertEquals(events[1].eventType, "BONUS_OBJECTIVE_LEFT")
 	AssertEquals(events[1].questId, 77771)
 	AssertTrue(string.find(events[1].text, "Tracked Bonus Objective", 1, true) ~= nil)
+end)
+
+QuestTogether:RegisterTest("clearing tracked completed bonus objective state suppresses left announcement diff", function()
+	local events = {}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 0
+		end,
+	})
+
+	if QuestTogether.ResetTaskAreaStateStore then
+		QuestTogether:ResetTaskAreaStateStore()
+	end
+
+	local bonusState = QuestTogether:GetTaskAreaStateStore("bonus")
+	bonusState[77772] = "Completed Bonus Objective"
+	QuestTogether:GetPlayerTracker()[77772] = {
+		title = "Completed Bonus Objective",
+		taskAnnouncementType = "bonus",
+	}
+	QuestTogether.questsCompleted[77772] = {
+		questId = 77772,
+		title = "Completed Bonus Objective",
+		taskAnnouncementType = "bonus",
+	}
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		QuestTogether:ClearTrackedQuestState(77772)
+	end)
+
+	AssertEquals(#events, 0)
+	AssertEquals(QuestTogether.questsCompleted[77772], nil)
 end)
 
 QuestTogether:RegisterTest("super tracking changed defers task area refresh off the live event stack", function()
@@ -2162,7 +2299,7 @@ end)
 QuestTogether:RegisterTest("tooltip quest detection uses isolated tooltip line scan for objectives", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -2209,7 +2346,7 @@ QuestTogether:RegisterTest("tooltip quest detection uses isolated tooltip line s
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection recognizes fallback-style progress lines", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -2258,7 +2395,7 @@ QuestTogether:RegisterTest("tooltip quest detection does not iterate tooltip arg
 			error("tooltip arg payload should not be iterated")
 		end,
 	})
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -2298,7 +2435,7 @@ QuestTogether:RegisterTest("tooltip quest detection does not iterate tooltip arg
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection blocks live scans while map-sensitive runtime gate is active", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 	QuestTogether.API = CreateApiWithOverrides({
 		IsWorldMapVisible = function()
 			return true
@@ -2334,7 +2471,7 @@ end)
 
 QuestTogether:RegisterTest("tooltip quest detection allows live scans in combat when map is closed", function()
 	local hiddenScanCount = 0
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 	QuestTogether.API = CreateApiWithOverrides({
 		InCombatLockdown = function()
 			return true
@@ -2382,7 +2519,7 @@ QuestTogether:RegisterTest("tooltip quest detection allows live scans in combat 
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection reuses cached state while runtime gate blocks live scans", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-12345-0000000000"] = true
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate1"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
@@ -2415,7 +2552,7 @@ QuestTogether:RegisterTest("tooltip quest detection reuses cached state while ru
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection skips live scans while runtime gate blocks them without cache", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -2453,7 +2590,7 @@ QuestTogether:RegisterTest("nameplate quest detection cache is keyed by guid and
 	local firstUnitFrame = {}
 	local secondUnitFrame = {}
 
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 	QuestTogether.isEnabled = true
 
 	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
@@ -2562,7 +2699,7 @@ end)
 
 QuestTogether:RegisterTest("tooltip quest detection reuses cached results while map-sensitive runtime gate blocks rescanning", function()
 	local structuredScanCount = 0
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-12345-0000000000"] = true
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate1"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
@@ -2603,7 +2740,7 @@ end)
 QuestTogether:RegisterTest("tooltip quest detection rescans after an initial false result", function()
 	local structuredScanCount = 0
 	local hiddenScanCount = 0
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -2743,7 +2880,7 @@ QuestTogether:RegisterTest("tooltip quest detection falls back to alternate unit
 end)
 
 QuestTogether:RegisterTest("tooltip quest detection can resolve live scans without a guid when unit tooltip sources succeed", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 	QuestTogether.isEnabled = true
 
 	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
@@ -2966,7 +3103,7 @@ QuestTogether:RegisterTest("structured-tooltip clients allow Blizzard tooltip sc
 			error("unit-token structured tooltip should win before hyperlink fallback")
 		end,
 	})
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
 		AssertEquals(unitToken, "nameplate1")
@@ -3013,7 +3150,7 @@ QuestTogether:RegisterTest("structured-tooltip clients fall back from unit paylo
 			}
 		end,
 	})
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
 		AssertEquals(unitToken, "nameplate1")
@@ -3029,7 +3166,7 @@ end)
 
 QuestTogether:RegisterTest("tooltip quest detection prefers Questie lines before Blizzard tooltip APIs", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
 		return true
@@ -3080,19 +3217,19 @@ QuestTogether:RegisterTest("hidden tooltip fallback stays enabled when structure
 	AssertTrue(QuestTogether:IsNameplateTooltipScanEnabled())
 end)
 
-QuestTogether:RegisterTest("nameplate quest title cache uses quest log titles without reading map task arrays", function()
+QuestTogether:RegisterTest("nameplate quest text cache uses quest log titles without reading map task arrays", function()
 	QuestTogether.API = CreateApiWithOverrides({
 		IsInInstance = function()
 			return false
 		end,
 		GetPlayerMapID = function(unitToken)
-			error("map task title cache reads should stay disabled for Blizzard map safety")
+			error("map task text cache reads should stay disabled for Blizzard map safety")
 		end,
 		GetTaskQuestsOnMap = function(mapID)
-			error("map task title cache reads should stay disabled for Blizzard map safety")
+			error("map task text cache reads should stay disabled for Blizzard map safety")
 		end,
 		GetTaskQuestTitle = function(questID)
-			error("map task title cache reads should stay disabled for Blizzard map safety")
+			error("map task text cache reads should stay disabled for Blizzard map safety")
 		end,
 	})
 	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
@@ -3112,16 +3249,16 @@ QuestTogether:RegisterTest("nameplate quest title cache uses quest log titles wi
 		WithPatchedMethod(QuestTogether, "GetQuestTitle", function()
 			error("quest-title fallback is not part of Plater's world quest cache")
 		end, function()
-			QuestTogether:RebuildNameplateQuestTitleCache()
+			QuestTogether:RebuildNameplateQuestTextCache()
 		end)
 	end)
 
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["Log Quest"])
-	AssertEquals(QuestTogether.nameplateQuestTitleCache["Tracked Quest"], nil)
-	AssertEquals(QuestTogether.nameplateQuestTitleCache["Bonus Objective"], nil)
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Log Quest"])
+	AssertEquals(QuestTogether.nameplateQuestTextCache["Tracked Quest"], nil)
+	AssertEquals(QuestTogether.nameplateQuestTextCache["Bonus Objective"], nil)
 end)
 
-QuestTogether:RegisterTest("nameplate quest title cache includes hidden quest log titles like Plater", function()
+QuestTogether:RegisterTest("nameplate quest text cache includes hidden quest log titles like Plater", function()
 	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
 	snapshotState.byQuestID = {
 		[20202] = {
@@ -3138,12 +3275,49 @@ QuestTogether:RegisterTest("nameplate quest title cache includes hidden quest lo
 		end,
 	})
 
-	QuestTogether:RebuildNameplateQuestTitleCache()
+	QuestTogether:RebuildNameplateQuestTextCache()
 
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["Hidden Quest"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Hidden Quest"])
 end)
 
-QuestTogether:RegisterTest("nameplate quest title cache still rebuilds during combat like Plater", function()
+QuestTogether:RegisterTest("nameplate quest text cache includes live unfinished objective texts", function()
+	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	snapshotState.byQuestID = {
+		[30303] = {
+			questID = 30303,
+			title = "Old War Grudge",
+			questLogIndex = 7,
+			isHeader = false,
+			isHidden = false,
+		},
+	}
+	snapshotState.order = { 30303 }
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return false
+		end,
+		GetNumQuestLeaderBoards = function(questLogIndex)
+			AssertEquals(questLogIndex, 7)
+			return 2
+		end,
+		GetQuestObjectiveInfo = function(questID, objectiveIndex, displayComplete)
+			AssertEquals(questID, 30303)
+			AssertEquals(displayComplete, false)
+			if objectiveIndex == 1 then
+				return "In War Mode obtain Hardin Steellock's Head", "monster", false, 0
+			end
+			return "Talk to the Marshal", "event", true, 1
+		end,
+	})
+
+	QuestTogether:RebuildNameplateQuestTextCache()
+
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Old War Grudge"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["In War Mode obtain Hardin Steellock's Head"])
+	AssertEquals(QuestTogether.nameplateQuestTextCache["Talk to the Marshal"], nil)
+end)
+
+QuestTogether:RegisterTest("nameplate quest text cache still rebuilds during combat like Plater", function()
 	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
 	snapshotState.byQuestID = {
 		[12345] = {
@@ -3168,13 +3342,13 @@ QuestTogether:RegisterTest("nameplate quest title cache still rebuilds during co
 		end,
 	})
 
-	QuestTogether:RebuildNameplateQuestTitleCache()
+	QuestTogether:RebuildNameplateQuestTextCache()
 
-	AssertTrue(QuestTogether.nameplateQuestTitleCache["Combat Quest"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Combat Quest"])
 end)
 
-QuestTogether:RegisterTest("nameplate quest title cache stays empty in instances", function()
-	QuestTogether.nameplateQuestTitleCache["Stale Quest"] = true
+QuestTogether:RegisterTest("nameplate quest text cache stays empty in instances", function()
+	QuestTogether.nameplateQuestTextCache["Stale Quest"] = true
 	QuestTogether.API = CreateApiWithOverrides({
 		IsInInstance = function()
 			return true
@@ -3184,15 +3358,37 @@ QuestTogether:RegisterTest("nameplate quest title cache stays empty in instances
 		end,
 	})
 
-	QuestTogether:RebuildNameplateQuestTitleCache()
+	QuestTogether:RebuildNameplateQuestTextCache()
 
-	AssertEquals(QuestTogether.nameplateQuestTitleCache["Stale Quest"], nil)
+	AssertEquals(QuestTogether.nameplateQuestTextCache["Stale Quest"], nil)
+end)
+
+QuestTogether:RegisterTest("nameplate quest text cache includes active tracked objective texts", function()
+	local tracker = QuestTogether:GetPlayerTracker()
+	tracker[30303] = {
+		title = "Old War Grudge",
+		objectives = {
+			"In War Mode obtain Hardin Steellock's Head",
+		},
+		isComplete = false,
+		isReadyForTurnIn = false,
+	}
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return false
+		end,
+	})
+
+	QuestTogether:RebuildNameplateQuestTextCache()
+
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Old War Grudge"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["In War Mode obtain Hardin Steellock's Head"])
 end)
 
 QuestTogether:RegisterTest("structured tooltip extraction surfaces args text when leftText is missing", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local tooltipLines = QuestTogether:ExtractQuestObjectiveTooltipLinesFromTooltipData({
 		lines = {
@@ -3227,7 +3423,7 @@ end)
 QuestTogether:RegisterTest("structured tooltip extraction surfaces tooltip args through the API helper", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local tooltipData = {
 		lines = {
@@ -3321,7 +3517,7 @@ QuestTogether:RegisterTest("tooltip objective evaluation accepts party-member pr
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
 	local playerLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestPlayer or "QuestPlayer"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3346,7 +3542,7 @@ QuestTogether:RegisterTest("tooltip objective evaluation accepts party-member pr
 end)
 
 QuestTogether:RegisterTest("tooltip objective evaluation accepts normalized string line types inside matched quest blocks", function()
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3370,7 +3566,7 @@ QuestTogether:RegisterTest("tooltip objective evaluation ignores complete-only o
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
 	local playerLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestPlayer or "QuestPlayer"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3396,7 +3592,7 @@ end)
 
 QuestTogether:RegisterTest("tooltip objective evaluation ignores quest-title-only lines", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3408,7 +3604,7 @@ QuestTogether:RegisterTest("tooltip objective evaluation ignores quest-title-onl
 	AssertFalse(hasObjective)
 end)
 
-QuestTogether:RegisterTest("tooltip objective evaluation requires matched quest title before progress", function()
+QuestTogether:RegisterTest("tooltip objective evaluation requires matched known quest text before progress", function()
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3420,10 +3616,38 @@ QuestTogether:RegisterTest("tooltip objective evaluation requires matched quest 
 	AssertFalse(hasObjective)
 end)
 
+QuestTogether:RegisterTest("tooltip objective evaluation accepts standalone tracked objective lines", function()
+	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
+	QuestTogether.nameplateQuestTextCache["In War Mode obtain Hardin Steellock's Head"] = true
+
+	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
+		{
+			type = objectiveLineType,
+			leftText = "0/1 In War Mode obtain Hardin Steellock's Head",
+		},
+	})
+
+	AssertTrue(hasObjective)
+end)
+
+QuestTogether:RegisterTest("tooltip objective evaluation ignores complete standalone tracked objective lines", function()
+	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
+	QuestTogether.nameplateQuestTextCache["In War Mode obtain Hardin Steellock's Head"] = true
+
+	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
+		{
+			type = objectiveLineType,
+			leftText = "1/1 In War Mode obtain Hardin Steellock's Head",
+		},
+	})
+
+	AssertFalse(hasObjective)
+end)
+
 QuestTogether:RegisterTest("tooltip objective evaluation ignores unmatched quest title blocks", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3442,7 +3666,7 @@ end)
 QuestTogether:RegisterTest("tooltip objective evaluation stops at threat marker", function()
 	local titleLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestTitle or "QuestTitle"
 	local objectiveLineType = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.QuestObjective or "QuestObjective"
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	local hasObjective = QuestTogether:EvaluateTooltipQuestObjectiveLines({
 		{
@@ -3471,7 +3695,7 @@ QuestTogether:RegisterTest("tooltip objective evaluation stops when tooltip line
 			error("secret line should not be indexed")
 		end,
 	})
-	QuestTogether.nameplateQuestTitleCache["Tracking the Trail"] = true
+	QuestTogether.nameplateQuestTextCache["Tracking the Trail"] = true
 
 	WithPatchedMethod(QuestTogether, "IsSecretValue", function(_, value)
 		return value == secretLine
@@ -4133,15 +4357,132 @@ QuestTogether:RegisterTest("bonus objective console announcement uses bonus obje
 	AssertTrue(string.find(message, "|cffffd200: entered the area|r", 1, true) ~= nil)
 end)
 
-QuestTogether:RegisterTest("world quest announcement icon info uses static world quest atlas", function()
+QuestTogether:RegisterTest("world quest announcement icon info prefers Blizzard world quest atlas helper", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestTagInfo = function(questID)
+			AssertEquals(questID, 12345)
+			return {
+				worldQuestType = 6,
+				tagID = 2,
+			}
+		end,
+		GetWorldQuestAtlasInfo = function(questID, tagInfo, inProgress)
+			AssertEquals(questID, 12345)
+			AssertEquals(tagInfo.worldQuestType, 6)
+			AssertFalse(inProgress)
+			return "worldquest-icon-dungeon"
+		end,
+		GetQuestDetailsThemePoiIcon = function()
+			error("world quest atlas helper should win before theme poi fallback")
+		end,
+	})
+
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("WORLD_QUEST_PROGRESS", 12345)
+	AssertEquals(asset, "worldquest-icon-dungeon")
+	AssertEquals(kind, "atlas")
+end)
+
+QuestTogether:RegisterTest("world quest announcement icon info falls back to static atlas", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestTagInfo = function()
+			return nil
+		end,
+		GetWorldQuestAtlasInfo = function()
+			return nil
+		end,
+		GetQuestDetailsThemePoiIcon = function()
+			return nil
+		end,
+	})
+
 	local asset, kind = QuestTogether:GetAnnouncementIconInfo("WORLD_QUEST_PROGRESS", 12345)
 	AssertEquals(asset, "worldquest-icon")
 	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("bonus objective announcement icon info uses static bonus objective atlas", function()
+QuestTogether:RegisterTest("bonus objective announcement icon info prefers Blizzard tag atlas helper", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestTagInfo = function(questID)
+			AssertEquals(questID, 54321)
+			return {
+				tagID = 81,
+				worldQuestType = nil,
+			}
+		end,
+		GetQuestTagAtlas = function(tagID, worldQuestType)
+			AssertEquals(tagID, 81)
+			AssertEquals(worldQuestType, nil)
+			return "QuestLegendary"
+		end,
+		GetQuestDetailsThemePoiIcon = function()
+			error("bonus objective tag atlas should win before theme poi fallback")
+		end,
+	})
+
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", 54321)
+	AssertEquals(asset, "QuestLegendary")
+	AssertEquals(kind, "atlas")
+end)
+
+QuestTogether:RegisterTest("bonus objective announcement icon info falls back to static atlas", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestTagInfo = function()
+			return nil
+		end,
+		GetQuestTagAtlas = function()
+			return nil
+		end,
+		GetQuestDetailsThemePoiIcon = function()
+			return nil
+		end,
+		GetQuestActiveAnnouncementIconInfo = function()
+			return nil, nil
+		end,
+	})
+
 	local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", 54321)
 	AssertEquals(asset, "Bonus-Objective-Star")
+	AssertEquals(kind, "atlas")
+end)
+
+QuestTogether:RegisterTest("quest accepted announcement icon info uses Blizzard offer helper", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestOfferAnnouncementIconInfo = function(questID)
+			AssertEquals(questID, 12345)
+			return "CampaignAvailableQuestIcon", "atlas"
+		end,
+	})
+
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("QUEST_ACCEPTED", 12345)
+	AssertEquals(asset, "CampaignAvailableQuestIcon")
+	AssertEquals(kind, "atlas")
+end)
+
+QuestTogether:RegisterTest("quest progress announcement icon info uses Blizzard active helper", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestActiveAnnouncementIconInfo = function(questID, isComplete)
+			AssertEquals(questID, 12345)
+			AssertFalse(isComplete)
+			return "CampaignInProgressQuestIcon", "atlas"
+		end,
+	})
+
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("QUEST_PROGRESS", 12345)
+	AssertEquals(asset, "CampaignInProgressQuestIcon")
+	AssertEquals(kind, "atlas")
+end)
+
+QuestTogether:RegisterTest("quest completion announcement icon info uses Blizzard complete helper", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestActiveAnnouncementIconInfo = function(questID, isComplete)
+			AssertEquals(questID, 12345)
+			AssertTrue(isComplete)
+			return "CampaignActiveQuestIcon", "atlas"
+		end,
+	})
+
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("QUEST_COMPLETED", 12345)
+	AssertEquals(asset, "CampaignActiveQuestIcon")
 	AssertEquals(kind, "atlas")
 end)
 
@@ -5345,7 +5686,7 @@ QuestTogether:RegisterTest("nameplate quest state refresh uses scheduler and sha
 		end,
 	})
 
-	WithPatchedMethod(QuestTogether, "RebuildNameplateQuestTitleCache", function()
+	WithPatchedMethod(QuestTogether, "RebuildNameplateQuestTextCache", function()
 		rebuildCalls = rebuildCalls + 1
 	end, function()
 		WithPatchedMethod(QuestTogether, "ClearNameplateResolvedQuestState", function()
@@ -5372,7 +5713,7 @@ QuestTogether:RegisterTest("nameplate quest state refresh clears guid detection 
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate1"] = "Creature-0-0-0-0-12345-0000000000"
 	QuestTogether.isEnabled = true
 
-	WithPatchedMethod(QuestTogether, "RebuildNameplateQuestTitleCache", function()
+	WithPatchedMethod(QuestTogether, "RebuildNameplateQuestTextCache", function()
 		rebuildCalls = rebuildCalls + 1
 	end, function()
 		WithPatchedMethod(QuestTogether, "RefreshNameplateAugmentation", function()

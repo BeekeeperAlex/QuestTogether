@@ -261,8 +261,8 @@ function QuestTogether:ClearTrackedQuestState(questId)
 	local tracker = self:GetPlayerTracker()
 	tracker[questId] = nil
 	self.pendingQuestRemovals[questId] = nil
-	self.questsCompleted[questId] = nil
 	self:RefreshTaskAreaStates(true)
+	self.questsCompleted[questId] = nil
 end
 
 function QuestTogether:ResolvePendingQuestRemoval(questId)
@@ -478,14 +478,12 @@ function QuestTogether:UNIT_QUEST_LOG_CHANGED(_, unit)
 						local completionChanged = questData.isComplete ~= currentIsComplete
 						if completionChanged then
 							questData.isComplete = currentIsComplete
-							self:RefreshTrackedQuestAnnouncementIcon(questId, questData)
 						end
 
 					local currentReadyForTurnIn = statusState and statusState.isReadyForTurnIn == true or false
 					local readyForTurnInChanged = questData.isReadyForTurnIn ~= currentReadyForTurnIn
 						if readyForTurnInChanged then
 							questData.isReadyForTurnIn = currentReadyForTurnIn
-							self:RefreshTrackedQuestAnnouncementIcon(questId, questData)
 							if currentReadyForTurnIn and not self:GetTaskAnnouncementType(questId) then
 								local questTitle = questData.title or self:GetQuestTitle(questId)
 								self:PublishAnnouncementEvent(

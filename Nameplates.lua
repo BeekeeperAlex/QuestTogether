@@ -183,7 +183,7 @@ if QuestTogether.EnsureRuntimeStateStore then
 	QuestTogether:EnsureRuntimeStateStore()
 end
 if not QuestTogether.GetNameplateStateStore then
-	QuestTogether.nameplateQuestTitleCache = QuestTogether.nameplateQuestTitleCache or {}
+	QuestTogether.nameplateQuestTextCache = QuestTogether.nameplateQuestTextCache or {}
 	QuestTogether.nameplateQuestStateByGuid = QuestTogether.nameplateQuestStateByGuid or {}
 	QuestTogether.nameplateQuestStateByUnitToken = QuestTogether.nameplateQuestStateByUnitToken or {}
 	QuestTogether.nameplateQuestGuidByUnitToken = QuestTogether.nameplateQuestGuidByUnitToken or {}
@@ -1248,12 +1248,12 @@ local function GetObjectiveProgressState(text)
 	return "unknown"
 end
 
-local function IsKnownQuestTitleLine(text)
+local function IsKnownNameplateQuestText(text)
 	local trimmedText = SafeTrimText(text)
 	if trimmedText == "" then
 		return false
 	end
-	return QuestTogether and QuestTogether.nameplateQuestTitleCache and QuestTogether.nameplateQuestTitleCache[trimmedText]
+	return QuestTogether and QuestTogether.nameplateQuestTextCache and QuestTogether.nameplateQuestTextCache[trimmedText]
 		or false
 end
 
@@ -1452,6 +1452,16 @@ local function NormalizeTooltipObjectiveEvidenceText(text)
 
 	normalizedText = string.gsub(normalizedText, "^[-%*%+%s]+", "")
 
+	local leadingAmountSuffix = SafeMatch(normalizedText, "^%d+%s*/%s*%d+%s+(.+)$")
+	if type(leadingAmountSuffix) == "string" and leadingAmountSuffix ~= "" then
+		normalizedText = SafeTrimText(leadingAmountSuffix)
+	end
+
+	local leadingPercentSuffix = SafeMatch(normalizedText, "^%d+%%%s+(.+)$")
+	if type(leadingPercentSuffix) == "string" and leadingPercentSuffix ~= "" then
+		normalizedText = SafeTrimText(leadingPercentSuffix)
+	end
+
 	local trimmedPrefix = SafeMatch(normalizedText, "^(.-):%s*%d+%s*/%s*%d+$")
 	if type(trimmedPrefix) == "string" and trimmedPrefix ~= "" then
 		normalizedText = SafeTrimText(trimmedPrefix)
@@ -1465,35 +1475,54 @@ local function NormalizeTooltipObjectiveEvidenceText(text)
 	return normalizedText
 end
 
+local function AddNameplateQuestTextToCache(cache, text)
+	if type(cache) ~= "table" then
+		return
+	end
+
+	local trimmedText = SafeTrimText(text)
+	if trimmedText == "" then
+		return
+	end
+
+	cache[trimmedText] = true
+
+	local normalizedText = NormalizeTooltipObjectiveEvidenceText(trimmedText)
+	if normalizedText ~= "" then
+		cache[normalizedText] = true
+	end
+end
+
 local function GetKnownTooltipQuestText(text)
 	local primaryText = SafeTrimText(text)
 	if primaryText == "" then
 		return nil
 	end
-	if IsKnownQuestTitleLine(primaryText) then
+	if IsKnownNameplateQuestText(primaryText) then
 		return primaryText
 	end
 
 	local normalizedText = NormalizeTooltipObjectiveEvidenceText(primaryText)
-	if normalizedText ~= "" and IsKnownQuestTitleLine(normalizedText) then
+	if normalizedText ~= "" and IsKnownNameplateQuestText(normalizedText) then
 		return normalizedText
 	end
 
 	return nil
 end
 
--- Mirrors Plater.IsQuestObjective (local retail Plater.lua:11219-11347):
--- find a matched quest title, walk following lines, stop at THREAT_TOOLTIP,
--- and only mark the unit when at least one following objective is unfinished.
+-- Mirrors Plater's tooltip-driven objective detection while broadening the
+-- addon-owned known-text cache to include active quest objective texts.
 function QuestTogether:TooltipLineHasUnfinishedObjectiveEvidence(lineData)
 	local leftText = GetTooltipQuestLeftText(self, lineData)
-	if leftText ~= "" and GetObjectiveProgressState(leftText) == "unfinished" then
+	local progressState = leftText ~= "" and GetObjectiveProgressState(leftText) or "unknown"
+	if leftText ~= "" and progressState == "unfinished" then
 		return true
 	end
 
 	if
 		leftText ~= ""
 		and IsTooltipQuestObjectiveLineType(lineData and lineData.type or nil)
+		and progressState ~= "complete"
 		and GetKnownTooltipQuestText(leftText) ~= nil
 	then
 		return true
@@ -1523,7 +1552,7 @@ function QuestTogether:EvaluateTooltipQuestObjectiveLines(tooltipLines)
 		return false
 	end
 
-	local matchedQuestTitle = false
+	local matchedQuestBlock = false
 
 	for _, lineData in ipairs(tooltipLines) do
 		if self:IsSecretValue(lineData) then
@@ -1536,16 +1565,20 @@ function QuestTogether:EvaluateTooltipQuestObjectiveLines(tooltipLines)
 		end
 
 		local primaryText = GetTooltipQuestLinePrimaryText(lineData)
-		if matchedQuestTitle then
+		local matchedQuestText = GetKnownTooltipQuestText(primaryText)
+		if not matchedQuestBlock and matchedQuestText ~= nil and self:TooltipLineHasUnfinishedObjectiveEvidence(lineData) then
+			return true
+		end
+		if matchedQuestBlock then
 			if IsThreatTooltipMarkerText(primaryText) then
-				matchedQuestTitle = false
+				matchedQuestBlock = false
 			elseif self:TooltipLineHasUnfinishedObjectiveEvidence(lineData) then
 				return true
-			elseif IsKnownQuestTitleLine(primaryText) then
-				matchedQuestTitle = true
+			elseif matchedQuestText ~= nil then
+				matchedQuestBlock = true
 			end
-		elseif IsKnownQuestTitleLine(primaryText) then
-			matchedQuestTitle = true
+		elseif matchedQuestText ~= nil then
+			matchedQuestBlock = true
 		end
 	end
 
@@ -1658,11 +1691,75 @@ function QuestTogether:TryGetCachedQuestObjectiveStateForGuid(unitGuid)
 	return true, cachedQuestObjective == true
 end
 
--- QuestTogether keeps the title cache on addon-owned quest snapshot state only.
--- Plater also adds current-map world quest titles from C_TaskQuest map arrays,
--- but those map-owned tables taint Blizzard POI/widget paths on the default UI.
-function QuestTogether:RebuildNameplateQuestTitleCache()
-	wipe(self.nameplateQuestTitleCache)
+local function AddTrackedQuestObjectiveTextsToNameplateCache(addon, cache)
+	if not addon or type(cache) ~= "table" or not addon.GetPlayerTracker then
+		return
+	end
+
+	local tracker = addon:GetPlayerTracker()
+	if type(tracker) ~= "table" then
+		return
+	end
+
+	for _, trackedQuest in pairs(tracker) do
+		if type(trackedQuest) == "table" then
+			AddNameplateQuestTextToCache(cache, trackedQuest.title)
+			if trackedQuest.isComplete ~= true and trackedQuest.isReadyForTurnIn ~= true then
+				local objectives = trackedQuest.objectives
+				if type(objectives) == "table" then
+					for objectiveIndex = 1, #objectives do
+						AddNameplateQuestTextToCache(cache, objectives[objectiveIndex])
+					end
+				end
+			end
+		end
+	end
+end
+
+local function AddLiveQuestObjectiveTextsToNameplateCache(addon, cache, questID, questDetails)
+	if not addon or type(cache) ~= "table" or type(questDetails) ~= "table" then
+		return
+	end
+
+	local api = addon.API
+	if type(api) ~= "table" then
+		return
+	end
+
+	local questLogIndex = addon.SafeToNumber and addon:SafeToNumber(questDetails.questLogIndex) or nil
+	if questLogIndex == nil then
+		return
+	end
+	questLogIndex = math.floor(questLogIndex + 0.5)
+	if questLogIndex <= 0 then
+		return
+	end
+
+	local objectiveCount = api.GetNumQuestLeaderBoards and api.GetNumQuestLeaderBoards(questLogIndex) or 0
+	objectiveCount = addon.SafeToNumber and addon:SafeToNumber(objectiveCount) or nil
+	if objectiveCount == nil then
+		return
+	end
+	objectiveCount = math.floor(objectiveCount + 0.5)
+	if objectiveCount <= 0 then
+		return
+	end
+
+	for objectiveIndex = 1, objectiveCount do
+		local objectiveText, _, finished =
+			api.GetQuestObjectiveInfo and api.GetQuestObjectiveInfo(questID, objectiveIndex, false)
+		if finished ~= true then
+			AddNameplateQuestTextToCache(cache, objectiveText)
+		end
+	end
+end
+
+-- QuestTogether keeps the nameplate quest-text cache on addon-owned quest-log
+-- state only. Plater also adds current-map world quest data from C_TaskQuest
+-- map arrays, but those map-owned tables taint Blizzard POI/widget paths on the
+-- default UI.
+function QuestTogether:RebuildNameplateQuestTextCache()
+	wipe(self.nameplateQuestTextCache)
 
 	if self.API and self.API.IsInInstance and self.API.IsInInstance() then
 		return
@@ -1681,10 +1778,13 @@ function QuestTogether:RebuildNameplateQuestTitleCache()
 	for index = 1, #snapshotOrder do
 		local questID = snapshotOrder[index]
 		local questDetails = snapshotByQuestID and snapshotByQuestID[questID] or nil
-		if questDetails and type(questDetails.title) == "string" and questDetails.title ~= "" then
-			self.nameplateQuestTitleCache[questDetails.title] = true
+		if questDetails then
+			AddNameplateQuestTextToCache(self.nameplateQuestTextCache, questDetails.title)
+			AddLiveQuestObjectiveTextsToNameplateCache(self, self.nameplateQuestTextCache, questID, questDetails)
 		end
 	end
+
+	AddTrackedQuestObjectiveTextsToNameplateCache(self, self.nameplateQuestTextCache)
 end
 
 function QuestTogether:TryGetReusableCachedNameplateQuestState(unitToken, unitGuid)
@@ -3709,7 +3809,7 @@ end
 
 function QuestTogether:RefreshNameplatesForQuestStateChange(reason)
 	self:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-	self:RebuildNameplateQuestTitleCache()
+	self:RebuildNameplateQuestTextCache()
 	self:ClearNameplateQuestDetectionCache()
 	self:ClearNameplateResolvedQuestState()
 	self:RefreshNameplateAugmentation()

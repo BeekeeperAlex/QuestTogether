@@ -17,7 +17,7 @@ local function BindRuntimeReferenceAliases(self, state)
 	self.questSnapshotByQuestID = state.questSnapshot.byQuestID
 	self.questSnapshotOrder = state.questSnapshot.order
 
-	self.nameplateQuestTitleCache = state.nameplate.titleCache
+	self.nameplateQuestTextCache = state.nameplate.textCache
 	self.nameplateQuestStateByGuid = state.nameplate.questStateByGuid
 	self.nameplateQuestStateByUnitToken = state.nameplate.questStateByUnitToken
 	self.nameplateQuestGuidByUnitToken = state.nameplate.questGuidByUnitToken
@@ -104,9 +104,9 @@ function QuestTogether:EnsureRuntimeStateStore()
 			and self.nameplateQuestGuidByUnitToken
 			or {}
 	end
-	if type(state.nameplate.titleCache) ~= "table" then
-		state.nameplate.titleCache = type(self.nameplateQuestTitleCache) == "table"
-			and self.nameplateQuestTitleCache
+	if type(state.nameplate.textCache) ~= "table" then
+		state.nameplate.textCache = type(self.nameplateQuestTextCache) == "table"
+			and self.nameplateQuestTextCache
 			or {}
 	end
 	if type(state.nameplate.refreshGenerationByUnitToken) ~= "table" then
@@ -262,7 +262,7 @@ function QuestTogether:ResetNameplateStateStore()
 	wipe(state.nameplate.questStateByGuid)
 	wipe(state.nameplate.questStateByUnitToken)
 	wipe(state.nameplate.questGuidByUnitToken)
-	wipe(state.nameplate.titleCache)
+	wipe(state.nameplate.textCache)
 	wipe(state.nameplate.refreshGenerationByUnitToken)
 	wipe(state.nameplate.refreshPendingByUnitToken)
 	wipe(state.nameplate.healthTintRefreshPendingByUnitToken)
