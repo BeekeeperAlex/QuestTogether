@@ -171,10 +171,14 @@ function QuestTogether:GetTaskAnnouncementType(questId)
 		return nil
 	end
 
-	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
-	local trackedQuest = tracker and tracker[questId] or nil
-	if trackedQuest and type(trackedQuest.taskAnnouncementType) == "string" and trackedQuest.taskAnnouncementType ~= "" then
-		return trackedQuest.taskAnnouncementType
+	local worldState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("world") or nil
+	if type(worldState) == "table" and worldState[questId] then
+		return "world"
+	end
+
+	local bonusState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("bonus") or nil
+	if type(bonusState) == "table" and bonusState[questId] then
+		return "bonus"
 	end
 
 	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(questId) or nil
@@ -214,7 +218,7 @@ function QuestTogether:BuildTrackedQuestRemovalData(questId)
 	return {
 		questId = questId,
 		title = questTitle or ("Quest " .. SafeText(questId, "?")),
-		taskAnnouncementType = trackedQuest.taskAnnouncementType or self:GetTaskAnnouncementType(questId),
+		taskAnnouncementType = self:GetTaskAnnouncementType(questId),
 		iconAsset = iconAsset,
 		iconKind = iconKind,
 	}

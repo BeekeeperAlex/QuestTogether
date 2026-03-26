@@ -968,6 +968,59 @@ QuestTogether.API = QuestTogether.API or {
 			end
 			return nil
 		end,
+		GetTaskQuestInfoByQuestID = function(questID)
+			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+				or nil
+			if not numericQuestID then
+				return nil
+			end
+			if not (C_TaskQuest and C_TaskQuest.GetQuestInfoByQuestID) then
+				return nil
+			end
+
+			local ok, questTitle, factionID, capped, displayAsObjective =
+				pcall(C_TaskQuest.GetQuestInfoByQuestID, numericQuestID)
+			if not ok then
+				return nil
+			end
+
+			local function NormalizeBooleanFlag(rawValue)
+				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
+					return nil
+				end
+				if type(rawValue) == "boolean" then
+					return rawValue
+				end
+				local numericFlag = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(rawValue) or nil
+				if numericFlag ~= nil then
+					return numericFlag ~= 0
+				end
+				return nil
+			end
+
+			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questTitle) then
+				questTitle = nil
+			end
+			if type(questTitle) ~= "string" or questTitle == "" then
+				questTitle = nil
+			end
+
+			local normalizedFactionID = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(factionID)
+				or nil
+			if normalizedFactionID ~= nil then
+				normalizedFactionID = math.floor(normalizedFactionID + 0.5)
+				if normalizedFactionID <= 0 then
+					normalizedFactionID = nil
+				end
+			end
+
+			return {
+				questTitle = questTitle,
+				factionID = normalizedFactionID,
+				capped = NormalizeBooleanFlag(capped),
+				displayAsObjective = NormalizeBooleanFlag(displayAsObjective),
+			}
+		end,
 		GetTaskInfo = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
 				or nil
@@ -2753,6 +2806,11 @@ function QuestTogether:RebuildQuestSnapshotStore()
 			if numericQuestID then
 				local isWorldQuest = questInfo.isWorldQuest == true
 				local isTaskQuest = questInfo.isTask == true or isWorldQuest == true
+				local taskQuestInfo = nil
+				if isTaskQuest and not isWorldQuest and self.API and self.API.GetTaskQuestInfoByQuestID then
+					taskQuestInfo = self.API.GetTaskQuestInfoByQuestID(numericQuestID)
+				end
+				local displayAsObjective = taskQuestInfo and taskQuestInfo.displayAsObjective == true or false
 
 				local snapshot = {
 					questID = numericQuestID,
@@ -2764,7 +2822,8 @@ function QuestTogether:RebuildQuestSnapshotStore()
 					hasLocalPOI = questInfo.hasLocalPOI == true,
 					isComplete = questInfo.isComplete == true,
 					isWorldQuest = isWorldQuest and true or false,
-					isBonusObjective = isTaskQuest == true and isWorldQuest ~= true,
+					displayAsObjective = displayAsObjective,
+					isBonusObjective = displayAsObjective,
 					tagInfo = nil,
 					poiIcon = nil,
 				}
@@ -3820,14 +3879,15 @@ function QuestTogether:IsBonusObjective(questId)
 	if self.EnsureQuestSnapshotStore then
 		self:EnsureQuestSnapshotStore()
 	end
+	local bonusState = self.GetTaskAreaStateStore and self:GetTaskAreaStateStore("bonus") or nil
+	if type(bonusState) == "table" and bonusState[numericQuestId] then
+		return true
+	end
 	local snapshot = self.GetQuestSnapshot and self:GetQuestSnapshot(numericQuestId) or nil
 	if snapshot and snapshot.isBonusObjective ~= nil then
 		return snapshot.isBonusObjective == true
 	end
-
-	local tracker = self.GetPlayerTracker and self:GetPlayerTracker() or nil
-	local trackedQuest = tracker and tracker[numericQuestId] or nil
-	return trackedQuest and trackedQuest.taskAnnouncementType == "bonus" or false
+	return false
 end
 
 function QuestTogether:GetQuestTitle(questId, questInfo)
@@ -5432,6 +5492,7 @@ function QuestTogether:WatchQuest(questId, questInfo)
 			questTitle = existingTitle
 		end
 	end
+	local initialStatusState = self.GetTrackedQuestStatusState and self:GetTrackedQuestStatusState(numericQuestId, true) or nil
 
 	tracker[numericQuestId] = {
 		title = questTitle,
@@ -5440,8 +5501,10 @@ function QuestTogether:WatchQuest(questId, questInfo)
 		-- Cached numeric objective values used to gate progress announcements.
 		-- This avoids noisy chat lines caused by text-only objective rewrites.
 		objectiveValues = {},
-		isComplete = questInfo and questInfo.isComplete == true or false,
-		isReadyForTurnIn = false,
+		isComplete = (questInfo and questInfo.isComplete == true)
+			or (initialStatusState and initialStatusState.isComplete == true)
+			or false,
+		isReadyForTurnIn = initialStatusState and initialStatusState.isReadyForTurnIn == true or false,
 	}
 	self:RefreshTrackedQuestAnnouncementIcon(numericQuestId, tracker[numericQuestId])
 

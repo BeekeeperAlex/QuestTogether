@@ -61,6 +61,9 @@ local function CreateApiWithOverrides(overrides)
 		IsTaskQuestActive = function()
 			return nil
 		end,
+		GetTaskQuestInfoByQuestID = function()
+			return nil
+		end,
 		IsQuestOnMap = function()
 			return nil
 		end,
@@ -489,6 +492,33 @@ QuestTogether:RegisterTest("WatchQuest stores tracker entries under normalized n
 	AssertEquals(tracker["bad-id"], nil)
 end)
 
+QuestTogether:RegisterTest("WatchQuest seeds ready-to-turn-in baseline from live status", function()
+	local tracker = QuestTogether:GetPlayerTracker()
+
+	QuestTogether.API = CreateApiWithOverrides({
+		IsQuestReadyForTurnIn = function(questId)
+			AssertEquals(questId, 12345)
+			return true
+		end,
+		IsQuestComplete = function(questId)
+			AssertEquals(questId, 12345)
+			return false
+		end,
+		GetQuestLogIndexForQuestID = function(questId)
+			AssertEquals(questId, 12345)
+			return 1
+		end,
+	})
+
+	QuestTogether:WatchQuest(12345, {
+		title = "Ready Quest",
+		questLogIndex = 1,
+	})
+
+	AssertTrue(tracker[12345] ~= nil)
+	AssertTrue(tracker[12345].isReadyForTurnIn)
+end)
+
 QuestTogether:RegisterTest("Safe conversions short-circuit values marked secret", function()
 	WithPatchedMethod(QuestTogether, "IsSecretValue", function(_, value)
 		return value == "secret-text" or value == 99
@@ -878,7 +908,7 @@ QuestTogether:RegisterTest("task area snapshot treats world quests as tasks when
 	end)
 end)
 
-QuestTogether:RegisterTest("task area snapshot derives bonus objectives from snapshot map flags only", function()
+QuestTogether:RegisterTest("task area snapshot derives bonus objectives from displayAsObjective plus snapshot map flags", function()
 	QuestTogether.API = CreateApiWithOverrides({
 		GetNumQuestLogEntries = function()
 			return 1
@@ -905,21 +935,74 @@ QuestTogether:RegisterTest("task area snapshot derives bonus objectives from sna
 		IsTaskQuestActive = function()
 			error("IsTaskQuestActive should not be called")
 		end,
+		GetTaskQuestInfoByQuestID = function(questId)
+			AssertEquals(questId, 33335)
+			return {
+				displayAsObjective = true,
+			}
+		end,
 	})
 
 	WithPatchedMethod(QuestTogether, "IsWorldQuest", function(_, questId)
 		AssertEquals(questId, 33335)
 		return false
 	end, function()
-		WithPatchedMethod(QuestTogether, "IsBonusObjective", function(_, questId)
-			AssertEquals(questId, 33335)
-			return true
+		QuestTogether:RefreshTaskAreaStates(false)
+		local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
+		AssertEquals(bonusSnapshot[33335], "Bonus Objective Without Live Helpers")
+		AssertTrue(QuestTogether:IsBonusObjective(33335))
+		AssertEquals(QuestTogether:GetTaskAnnouncementType(33335), "bonus")
+	end)
+end)
+
+QuestTogether:RegisterTest("task area snapshot does not classify normal task quests as bonus objectives", function()
+	local events = {}
+
+	QuestTogether.API = CreateApiWithOverrides({
+		GetNumQuestLogEntries = function()
+			return 1
+		end,
+		GetQuestLogInfo = function(questLogIndex)
+			AssertEquals(questLogIndex, 1)
+			return {
+				questID = 33336,
+				title = "Normal Task Quest",
+				isHeader = false,
+				isHidden = false,
+				isTask = true,
+				isOnMap = true,
+				hasLocalPOI = true,
+				isWorldQuest = false,
+			}
+		end,
+		GetTaskQuestInfoByQuestID = function(questId)
+			AssertEquals(questId, 33336)
+			return {
+				displayAsObjective = false,
+			}
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "PublishAnnouncementEvent", function(_, eventType, text, questId)
+		events[#events + 1] = {
+			eventType = eventType,
+			text = text,
+			questId = questId,
+		}
+	end, function()
+		WithPatchedMethod(QuestTogether, "IsWorldQuest", function(_, questId)
+			AssertEquals(questId, 33336)
+			return false
 		end, function()
-			QuestTogether:RefreshTaskAreaStates(false)
+			QuestTogether:RefreshTaskAreaStates(true)
 			local bonusSnapshot = QuestTogether:GetTaskAreaSnapshot("bonus")
-			AssertEquals(bonusSnapshot[33335], "Bonus Objective Without Live Helpers")
+			AssertEquals(bonusSnapshot[33336], nil)
+			AssertFalse(QuestTogether:IsBonusObjective(33336))
+			AssertEquals(QuestTogether:GetTaskAnnouncementType(33336), nil)
 		end)
 	end)
+
+	AssertEquals(#events, 0)
 end)
 
 QuestTogether:RegisterTest("quest-blob state change refreshes task area states with announcements", function()

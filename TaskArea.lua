@@ -116,19 +116,13 @@ local function BuildActiveTaskAreaSnapshot(taskAreaState, taskType)
 	return activeByQuestId
 end
 
-local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId)
+local function ResolveQuestAreaSignals(addon, taskType, questInfo, normalizedQuestId, isBonusObjective)
 	local mapFlags = questInfo and (questInfo.isOnMap == true or questInfo.hasLocalPOI == true) and true or false
-	local explicitTask = questInfo and questInfo.isTask == true or false
-	local explicitWorld = questInfo and questInfo.isWorldQuest == true or false
-	local taskAnnouncementType = questInfo and questInfo.taskAnnouncementType or addon:GetTaskAnnouncementType(normalizedQuestId)
-	local inferredBonus = taskAnnouncementType == "bonus"
 
 	local areaActive = false
 	if taskType == "world" then
 		areaActive = mapFlags
-	elseif mapFlags then
-		areaActive = true
-	elseif explicitTask and not explicitWorld and inferredBonus then
+	elseif mapFlags and isBonusObjective == true then
 		areaActive = true
 	end
 
@@ -146,14 +140,13 @@ local function BuildTaskAreaResolution(addon, normalizedQuestId, questInfo)
 	local explicitTask = questInfo and questInfo.isTask == true or false
 	local fallbackWorld = addon:IsWorldQuest(normalizedQuestId)
 	local isWorldQuest = explicitWorld or fallbackWorld
-	local explicitBonus = questInfo and questInfo.isBonusObjective == true or false
-	local fallbackBonus = addon:IsBonusObjective(normalizedQuestId)
-	local isBonusObjective = isWorldQuest ~= true and (explicitBonus or fallbackBonus)
+	local explicitBonus = questInfo and (questInfo.isBonusObjective == true or questInfo.displayAsObjective == true) or false
+	local isBonusObjective = isWorldQuest ~= true and explicitBonus
 	local taskAnnouncementType = isWorldQuest and "world" or (isBonusObjective and "bonus" or nil)
 	local isTask = explicitTask or isWorldQuest or isBonusObjective
 
-	local worldSignals = ResolveQuestAreaSignals(addon, "world", questInfo, normalizedQuestId)
-	local bonusSignals = ResolveQuestAreaSignals(addon, "bonus", questInfo, normalizedQuestId)
+	local worldSignals = ResolveQuestAreaSignals(addon, "world", questInfo, normalizedQuestId, isBonusObjective)
+	local bonusSignals = ResolveQuestAreaSignals(addon, "bonus", questInfo, normalizedQuestId, isBonusObjective)
 
 	local isWorldQuestByActiveTaskFallback = false
 	if not isWorldQuest and worldSignals.canUseTaskActiveWorldFallback and not isBonusObjective then
@@ -180,9 +173,8 @@ local function BuildTaskAreaResolution(addon, normalizedQuestId, questInfo)
 		fallbackWorld = fallbackWorld,
 		explicitTask = explicitTask,
 		explicitBonus = explicitBonus,
-		fallbackBonus = fallbackBonus,
 		isWorldQuest = isWorldQuest and true or false,
-		isBonusObjective = includeBonus or isBonusObjective,
+		isBonusObjective = isBonusObjective and true or false,
 		isTask = isTask and true or false,
 		isWorldQuestByActiveTaskFallback = isWorldQuestByActiveTaskFallback,
 		includeWorld = includeWorld and true or false,
