@@ -414,8 +414,11 @@ function QuestTogether:UNIT_QUEST_LOG_CHANGED(_, unit)
 							or 0
 
 					for objectiveIndex = 1, numObjectives do
-						local objectiveText, objectiveType, _, currentValue =
-							self.API.GetQuestObjectiveInfo and self.API.GetQuestObjectiveInfo(questId, objectiveIndex, false)
+						local objectiveText, objectiveType, _, currentValue = nil, nil, nil, nil
+						if self.API.GetQuestObjectiveInfo then
+							objectiveText, objectiveType, _, currentValue =
+								self.API.GetQuestObjectiveInfo(questId, objectiveIndex, false)
+						end
 						if objectiveText == nil and objectiveType == nil and currentValue == nil then
 							objectiveText = ""
 						end

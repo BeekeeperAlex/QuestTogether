@@ -64,6 +64,15 @@ local function CreateApiWithOverrides(overrides)
 		IsWorldQuest = function()
 			return nil
 		end,
+		GetQuestClassification = function()
+			return nil
+		end,
+		GetQuestFrequency = function()
+			return nil
+		end,
+		GetQuestPoiTagType = function()
+			return nil
+		end,
 		GetTaskQuestInfoByQuestID = function()
 			return nil
 		end,
@@ -3282,10 +3291,12 @@ end)
 
 QuestTogether:RegisterTest("nameplate quest text cache includes live unfinished objective texts", function()
 	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	local tracker = QuestTogether:GetPlayerTracker()
+	wipe(tracker)
 	snapshotState.byQuestID = {
 		[30303] = {
 			questID = 30303,
-			title = "Old War Grudge",
+			title = "QT Live Objective Cache Test",
 			questLogIndex = 7,
 			isHeader = false,
 			isHidden = false,
@@ -3304,17 +3315,17 @@ QuestTogether:RegisterTest("nameplate quest text cache includes live unfinished 
 			AssertEquals(questID, 30303)
 			AssertEquals(displayComplete, false)
 			if objectiveIndex == 1 then
-				return "In War Mode obtain Hardin Steellock's Head", "monster", false, 0
+				return "QT unfinished objective sentinel", "monster", false, 0
 			end
-			return "Talk to the Marshal", "event", true, 1
+			return "QT finished objective sentinel", "event", true, 1
 		end,
 	})
 
 	QuestTogether:RebuildNameplateQuestTextCache()
 
-	AssertTrue(QuestTogether.nameplateQuestTextCache["Old War Grudge"])
-	AssertTrue(QuestTogether.nameplateQuestTextCache["In War Mode obtain Hardin Steellock's Head"])
-	AssertEquals(QuestTogether.nameplateQuestTextCache["Talk to the Marshal"], nil)
+	AssertTrue(QuestTogether.nameplateQuestTextCache["QT Live Objective Cache Test"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["QT unfinished objective sentinel"])
+	AssertEquals(QuestTogether.nameplateQuestTextCache["QT finished objective sentinel"], nil)
 end)
 
 QuestTogether:RegisterTest("nameplate quest text cache still rebuilds during combat like Plater", function()
@@ -4357,23 +4368,16 @@ QuestTogether:RegisterTest("bonus objective console announcement uses bonus obje
 	AssertTrue(string.find(message, "|cffffd200: entered the area|r", 1, true) ~= nil)
 end)
 
-QuestTogether:RegisterTest("world quest announcement icon info prefers Blizzard world quest atlas helper", function()
+QuestTogether:RegisterTest("world quest announcement icon info prefers owned POI tag atlas", function()
 	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestTagInfo = function(questID)
+		GetQuestPoiTagType = function(questID)
 			AssertEquals(questID, 12345)
-			return {
-				worldQuestType = 6,
-				tagID = 2,
-			}
+			return Enum and Enum.QuestTagType and Enum.QuestTagType.Dungeon or 6
 		end,
-		GetWorldQuestAtlasInfo = function(questID, tagInfo, inProgress)
-			AssertEquals(questID, 12345)
-			AssertEquals(tagInfo.worldQuestType, 6)
-			AssertFalse(inProgress)
+		GetQuestTagAtlas = function(tagID, worldQuestType)
+			AssertEquals(tagID, nil)
+			AssertEquals(worldQuestType, Enum and Enum.QuestTagType and Enum.QuestTagType.Dungeon or 6)
 			return "worldquest-icon-dungeon"
-		end,
-		GetQuestDetailsThemePoiIcon = function()
-			error("world quest atlas helper should win before theme poi fallback")
 		end,
 	})
 
@@ -4384,13 +4388,10 @@ end)
 
 QuestTogether:RegisterTest("world quest announcement icon info falls back to static atlas", function()
 	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestTagInfo = function()
+		GetQuestPoiTagType = function()
 			return nil
 		end,
-		GetWorldQuestAtlasInfo = function()
-			return nil
-		end,
-		GetQuestDetailsThemePoiIcon = function()
+		GetQuestTagAtlas = function()
 			return nil
 		end,
 	})
@@ -4400,56 +4401,38 @@ QuestTogether:RegisterTest("world quest announcement icon info falls back to sta
 	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("bonus objective announcement icon info prefers Blizzard tag atlas helper", function()
+QuestTogether:RegisterTest("bonus objective announcement icon info prefers owned quest state icon fallback", function()
 	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestTagInfo = function(questID)
+		GetQuestClassification = function(questID)
 			AssertEquals(questID, 54321)
-			return {
-				tagID = 81,
-				worldQuestType = nil,
-			}
+			return Enum and Enum.QuestClassification and Enum.QuestClassification.Important or nil
 		end,
-		GetQuestTagAtlas = function(tagID, worldQuestType)
-			AssertEquals(tagID, 81)
-			AssertEquals(worldQuestType, nil)
-			return "QuestLegendary"
-		end,
-		GetQuestDetailsThemePoiIcon = function()
-			error("bonus objective tag atlas should win before theme poi fallback")
+		GetQuestFrequency = function(questID)
+			AssertEquals(questID, 54321)
+			return nil
 		end,
 	})
 
 	local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", 54321)
-	AssertEquals(asset, "QuestLegendary")
+	AssertEquals(asset, "importantInProgressquesticon")
 	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("bonus objective announcement icon info falls back to static atlas", function()
-	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestTagInfo = function()
-			return nil
-		end,
-		GetQuestTagAtlas = function()
-			return nil
-		end,
-		GetQuestDetailsThemePoiIcon = function()
-			return nil
-		end,
-		GetQuestActiveAnnouncementIconInfo = function()
-			return nil, nil
-		end,
-	})
-
-	local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", 54321)
+QuestTogether:RegisterTest("bonus objective announcement icon info falls back to static atlas without quest id", function()
+	local asset, kind = QuestTogether:GetAnnouncementIconInfo("BONUS_OBJECTIVE_PROGRESS", nil)
 	AssertEquals(asset, "Bonus-Objective-Star")
 	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("quest accepted announcement icon info uses Blizzard offer helper", function()
+QuestTogether:RegisterTest("quest accepted announcement icon info uses owned classification resolver", function()
 	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestOfferAnnouncementIconInfo = function(questID)
+		GetQuestClassification = function(questID)
 			AssertEquals(questID, 12345)
-			return "CampaignAvailableQuestIcon", "atlas"
+			return Enum and Enum.QuestClassification and Enum.QuestClassification.Campaign or nil
+		end,
+		GetQuestFrequency = function(questID)
+			AssertEquals(questID, 12345)
+			return nil
 		end,
 	})
 
@@ -4458,26 +4441,32 @@ QuestTogether:RegisterTest("quest accepted announcement icon info uses Blizzard 
 	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("quest progress announcement icon info uses Blizzard active helper", function()
+QuestTogether:RegisterTest("quest progress announcement icon info uses owned classification resolver", function()
 	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestActiveAnnouncementIconInfo = function(questID, isComplete)
+		GetQuestClassification = function(questID)
 			AssertEquals(questID, 12345)
-			AssertFalse(isComplete)
-			return "CampaignInProgressQuestIcon", "atlas"
+			return Enum and Enum.QuestClassification and Enum.QuestClassification.Important or nil
+		end,
+		GetQuestFrequency = function(questID)
+			AssertEquals(questID, 12345)
+			return nil
 		end,
 	})
 
 	local asset, kind = QuestTogether:GetAnnouncementIconInfo("QUEST_PROGRESS", 12345)
-	AssertEquals(asset, "CampaignInProgressQuestIcon")
+	AssertEquals(asset, "importantInProgressquesticon")
 	AssertEquals(kind, "atlas")
 end)
 
-QuestTogether:RegisterTest("quest completion announcement icon info uses Blizzard complete helper", function()
+QuestTogether:RegisterTest("quest completion announcement icon info uses owned classification resolver", function()
 	QuestTogether.API = CreateApiWithOverrides({
-		GetQuestActiveAnnouncementIconInfo = function(questID, isComplete)
+		GetQuestClassification = function(questID)
 			AssertEquals(questID, 12345)
-			AssertTrue(isComplete)
-			return "CampaignActiveQuestIcon", "atlas"
+			return Enum and Enum.QuestClassification and Enum.QuestClassification.Campaign or nil
+		end,
+		GetQuestFrequency = function(questID)
+			AssertEquals(questID, 12345)
+			return nil
 		end,
 	})
 

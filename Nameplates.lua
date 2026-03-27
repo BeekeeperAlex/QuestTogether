@@ -1746,8 +1746,10 @@ local function AddLiveQuestObjectiveTextsToNameplateCache(addon, cache, questID,
 	end
 
 	for objectiveIndex = 1, objectiveCount do
-		local objectiveText, _, finished =
-			api.GetQuestObjectiveInfo and api.GetQuestObjectiveInfo(questID, objectiveIndex, false)
+		local objectiveText, _, finished = nil, nil, nil
+		if api.GetQuestObjectiveInfo then
+			objectiveText, _, finished = api.GetQuestObjectiveInfo(questID, objectiveIndex, false)
+		end
 		if finished ~= true then
 			AddNameplateQuestTextToCache(cache, objectiveText)
 		end

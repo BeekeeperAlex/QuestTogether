@@ -22,6 +22,8 @@ local raw_tostring = tostring
 local raw_string_match = string.match
 local raw_string_find = string.find
 local raw_issecretvalue = type(issecretvalue) == "function" and issecretvalue or nil
+local raw_canaccessvalue = type(canaccessvalue) == "function" and canaccessvalue or nil
+local raw_canaccesstable = type(canaccesstable) == "function" and canaccesstable or nil
 
 local DEBUG_WINDOW_TITLE = "QuestTogether Debug Window"
 local DEBUG_WINDOW_HINT =
@@ -41,6 +43,47 @@ local function NormalizeQuestInfoFlagValue(rawValue)
 		return numericFlag ~= 0
 	end
 	return nil
+end
+
+local function CanAccessForeignValue(rawValue)
+	if raw_canaccessvalue then
+		local ok, canAccess = pcall(raw_canaccessvalue, rawValue)
+		if not ok or not canAccess then
+			return false
+		end
+	end
+	if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
+		return false
+	end
+	return true
+end
+
+local function CanAccessForeignTable(rawTable)
+	if type(rawTable) ~= "table" then
+		return false
+	end
+	if raw_canaccesstable then
+		local ok, canAccess = pcall(raw_canaccesstable, rawTable)
+		if not ok or not canAccess then
+			return false
+		end
+	end
+	return CanAccessForeignValue(rawTable)
+end
+
+local function SanitizeQuestInfoEnumValue(rawValue)
+	if not CanAccessForeignValue(rawValue) then
+		return nil
+	end
+	local numericValue = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(rawValue) or nil
+	if numericValue == nil then
+		return nil
+	end
+	numericValue = math.floor(numericValue + 0.5)
+	if numericValue < 0 then
+		return nil
+	end
+	return numericValue
 end
 
 local function BuildSanitizedQuestLogInfoRecord(questLogIndex, titleValue, isHeaderValue, isHiddenValue, isTaskValue, isOnMapValue, hasLocalPOIValue, isCompleteValue, questIDValue, displayQuestIDValue, isWorldQuestValue)
@@ -84,11 +127,11 @@ local function BuildSanitizedQuestLogInfoRecord(questLogIndex, titleValue, isHea
 end
 
 local function BuildSanitizedQuestLogInfoFromRawInfo(questLogIndex, rawInfo)
-	if type(rawInfo) ~= "table" then
+	if not CanAccessForeignTable(rawInfo) then
 		return nil
 	end
 
-	return BuildSanitizedQuestLogInfoRecord(
+	local sanitizedInfo = BuildSanitizedQuestLogInfoRecord(
 		questLogIndex,
 		rawInfo.title,
 		rawInfo.isHeader,
@@ -101,6 +144,14 @@ local function BuildSanitizedQuestLogInfoFromRawInfo(questLogIndex, rawInfo)
 		rawInfo.displayQuestID,
 		rawInfo.isWorldQuest
 	)
+	if not sanitizedInfo then
+		return nil
+	end
+
+	sanitizedInfo.campaignID = SanitizeQuestInfoEnumValue(rawInfo.campaignID)
+	sanitizedInfo.frequency = SanitizeQuestInfoEnumValue(rawInfo.frequency)
+	sanitizedInfo.questClassification = SanitizeQuestInfoEnumValue(rawInfo.questClassification)
+	return sanitizedInfo
 end
 
 local function MergeSanitizedQuestLogInfo(primaryInfo, fallbackInfo)
@@ -121,6 +172,9 @@ local function MergeSanitizedQuestLogInfo(primaryInfo, fallbackInfo)
 	mergedInfo.isOnMap = primaryInfo.isOnMap == true or fallbackInfo.isOnMap == true
 	mergedInfo.hasLocalPOI = primaryInfo.hasLocalPOI == true or fallbackInfo.hasLocalPOI == true
 	mergedInfo.isComplete = primaryInfo.isComplete == true or fallbackInfo.isComplete == true
+	mergedInfo.campaignID = primaryInfo.campaignID or fallbackInfo.campaignID
+	mergedInfo.frequency = primaryInfo.frequency or fallbackInfo.frequency
+	mergedInfo.questClassification = primaryInfo.questClassification or fallbackInfo.questClassification
 	if primaryInfo.isWorldQuest ~= nil then
 		mergedInfo.isWorldQuest = primaryInfo.isWorldQuest == true
 	elseif fallbackInfo.isWorldQuest ~= nil then
@@ -947,148 +1001,72 @@ QuestTogether.API = QuestTogether.API or {
 			end
 			return false
 		end,
-		GetQuestOfferAnnouncementIconInfo = function(questID)
+		GetQuestClassification = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
 				or nil
 			if not numericQuestID then
-				return nil, nil
-			end
-			if not QuestUtil or type(QuestUtil.GetQuestIconOfferForQuestID) ~= "function" then
-				return nil, nil
+				return nil
 			end
 
-			local ok, iconAsset, isAtlas = pcall(QuestUtil.GetQuestIconOfferForQuestID, numericQuestID)
-			if not ok then
-				return nil, nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue then
-				if QuestTogether:IsSecretValue(iconAsset) then
-					return nil, nil
+			if C_QuestInfoSystem and C_QuestInfoSystem.GetQuestClassification then
+				local ok, classification = pcall(C_QuestInfoSystem.GetQuestClassification, numericQuestID)
+				if ok and CanAccessForeignValue(classification) then
+					local normalizedClassification = QuestTogether and QuestTogether.SafeToNumber
+						and QuestTogether:SafeToNumber(classification)
+						or nil
+					if normalizedClassification ~= nil and normalizedClassification >= 0 then
+						return math.floor(normalizedClassification + 0.5)
+					end
 				end
-				if QuestTogether:IsSecretValue(isAtlas) then
-					return nil, nil
-				end
-			end
-			if type(iconAsset) ~= "string" or iconAsset == "" then
-				return nil, nil
 			end
 
-			return iconAsset, isAtlas == true and "atlas" or "texture"
+			local questLogIndex = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestLogIndexForQuestID
+				and QuestTogether.API.GetQuestLogIndexForQuestID(numericQuestID)
+				or nil
+			if not questLogIndex then
+				return nil
+			end
+
+			local questInfo = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestLogInfo
+				and QuestTogether.API.GetQuestLogInfo(questLogIndex)
+				or nil
+			if type(questInfo) ~= "table" then
+				return nil
+			end
+
+			return SanitizeQuestInfoEnumValue(questInfo.questClassification)
 		end,
-		GetQuestActiveAnnouncementIconInfo = function(questID, isComplete)
-			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
-				or nil
-			if not numericQuestID then
-				return nil, nil
-			end
-			if not QuestUtil or type(QuestUtil.GetQuestIconActiveForQuestID) ~= "function" then
-				return nil, nil
-			end
-
-			local ok, iconAsset, isAtlas =
-				pcall(QuestUtil.GetQuestIconActiveForQuestID, numericQuestID, isComplete == true)
-			if not ok then
-				return nil, nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue then
-				if QuestTogether:IsSecretValue(iconAsset) then
-					return nil, nil
-				end
-				if QuestTogether:IsSecretValue(isAtlas) then
-					return nil, nil
-				end
-			end
-			if type(iconAsset) ~= "string" or iconAsset == "" then
-				return nil, nil
-			end
-
-			return iconAsset, isAtlas == true and "atlas" or "texture"
-		end,
-		GetQuestTagInfo = function(questID)
+		GetQuestFrequency = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
 				or nil
 			if not numericQuestID then
 				return nil
 			end
-			if not (C_QuestLog and C_QuestLog.GetQuestTagInfo) then
-				return nil
-			end
 
-			local ok, tagInfo = pcall(C_QuestLog.GetQuestTagInfo, numericQuestID)
-			if not ok or type(tagInfo) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(tagInfo) then
-				return nil
-			end
-
-			local function SanitizeNumber(value)
-				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(value) then
-					return nil
-				end
-				local numericValue = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(value) or nil
-				if numericValue == nil then
-					return nil
-				end
-				return math.floor(numericValue + 0.5)
-			end
-
-			local function SanitizeBoolean(value)
-				if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(value) then
-					return nil
-				end
-				if type(value) == "boolean" then
-					return value
-				end
-				local numericValue = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(value) or nil
-				if numericValue == nil then
-					return nil
-				end
-				return numericValue ~= 0
-			end
-
-			return {
-				tagID = SanitizeNumber(tagInfo.tagID),
-				worldQuestType = SanitizeNumber(tagInfo.worldQuestType),
-				tradeskillLineID = SanitizeNumber(tagInfo.tradeskillLineID),
-				quality = SanitizeNumber(tagInfo.quality),
-				isElite = SanitizeBoolean(tagInfo.isElite),
-			}
-		end,
-		GetQuestDetailsThemePoiIcon = function(questID)
-			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
+			local questLogIndex = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestLogIndexForQuestID
+				and QuestTogether.API.GetQuestLogIndexForQuestID(numericQuestID)
 				or nil
-			if not numericQuestID then
-				return nil
-			end
-			if not (C_QuestLog and C_QuestLog.GetQuestDetailsTheme) then
+			if not questLogIndex then
 				return nil
 			end
 
-			local ok, theme = pcall(C_QuestLog.GetQuestDetailsTheme, numericQuestID)
-			if not ok or type(theme) ~= "table" then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(theme) then
-				return nil
-			end
-
-			local poiIcon = theme.poiIcon
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(poiIcon) then
-				return nil
-			end
-			if type(poiIcon) ~= "string" or poiIcon == "" then
+			local questInfo = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestLogInfo
+				and QuestTogether.API.GetQuestLogInfo(questLogIndex)
+				or nil
+			if type(questInfo) ~= "table" then
 				return nil
 			end
 
-			return poiIcon
+			return SanitizeQuestInfoEnumValue(questInfo.frequency)
 		end,
 		GetQuestTagAtlas = function(tagID, worldQuestType)
 			if type(QuestUtils_GetQuestTagAtlas) ~= "function" then
 				return nil
 			end
 
-			local ok, atlas = pcall(QuestUtils_GetQuestTagAtlas, tagID, worldQuestType)
+			local normalizedTagID = SanitizeQuestInfoEnumValue(tagID)
+			local normalizedWorldQuestType = SanitizeQuestInfoEnumValue(worldQuestType)
+			local ok, atlas = pcall(QuestUtils_GetQuestTagAtlas, normalizedTagID, normalizedWorldQuestType)
 			if not ok then
 				return nil
 			end
@@ -1101,28 +1079,39 @@ QuestTogether.API = QuestTogether.API or {
 
 			return atlas
 		end,
-		GetWorldQuestAtlasInfo = function(questID, tagInfo, inProgress)
+		GetQuestPoiTagType = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
 				or nil
-			if not numericQuestID or type(tagInfo) ~= "table" then
-				return nil
-			end
-			if not (QuestUtil and type(QuestUtil.GetWorldQuestAtlasInfo) == "function") then
+			if not numericQuestID then
 				return nil
 			end
 
-			local ok, atlas = pcall(QuestUtil.GetWorldQuestAtlasInfo, numericQuestID, tagInfo, inProgress == true)
-			if not ok then
-				return nil
-			end
-			if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(atlas) then
-				return nil
-			end
-			if type(atlas) ~= "string" or atlas == "" then
+			local currentMapID = QuestTogether and QuestTogether.API and QuestTogether.API.GetPlayerMapID
+				and QuestTogether.API.GetPlayerMapID("player")
+				or nil
+			if not currentMapID then
 				return nil
 			end
 
-			return atlas
+			local questPois = QuestTogether and QuestTogether.API and QuestTogether.API.GetQuestPOIsOnMap
+				and QuestTogether.API.GetQuestPOIsOnMap(currentMapID)
+				or nil
+			if type(questPois) ~= "table" then
+				return nil
+			end
+
+			for index = 1, #questPois do
+				local poiInfo = questPois[index]
+				if type(poiInfo) == "table" then
+					local poiQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(poiInfo.questID)
+						or nil
+					if poiQuestID == numericQuestID then
+						return SanitizeQuestInfoEnumValue(poiInfo.questTagType)
+					end
+				end
+			end
+
+			return nil
 		end,
 		IsQuestOnMap = function(questID)
 			local numericQuestID = QuestTogether and QuestTogether.NormalizeQuestID and QuestTogether:NormalizeQuestID(questID)
@@ -1402,19 +1391,16 @@ QuestTogether.API = QuestTogether.API or {
 			end
 
 			local ok, tasks = pcall(getTaskQuestsForMap, numericMapID)
-			if not ok or (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(tasks)) then
-				return nil
-			end
-			if type(tasks) ~= "table" then
+			if not ok or not CanAccessForeignTable(tasks) then
 				return nil
 			end
 
 			local questIds = {}
 			for index = 1, #tasks do
 				local taskInfo = tasks[index]
-				if type(taskInfo) == "table" and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(taskInfo)) then
+				if CanAccessForeignTable(taskInfo) then
 					local questID = taskInfo.questId
-					if not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questID)) then
+					if CanAccessForeignValue(questID) then
 						local numericQuestID = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(questID)
 							or nil
 						if numericQuestID and numericQuestID > 0 then
@@ -1459,24 +1445,21 @@ QuestTogether.API = QuestTogether.API or {
 			end
 
 			local ok, pois = pcall(C_QuestLog.GetQuestsOnMap, numericMapID)
-			if not ok or (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(pois)) then
-				return nil
-			end
-			if type(pois) ~= "table" then
+			if not ok or not CanAccessForeignTable(pois) then
 				return nil
 			end
 
 			local sanitized = {}
 			for index = 1, #pois do
 				local poi = pois[index]
-				if type(poi) == "table" and not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(poi)) then
+				if CanAccessForeignTable(poi) then
 					local questID = poi.questID
-					if not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(questID)) then
+					if CanAccessForeignValue(questID) then
 						local numericQuestID = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(questID)
 							or nil
 						if numericQuestID and numericQuestID > 0 then
 							local function NormalizeBool(rawValue)
-								if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
+								if not CanAccessForeignValue(rawValue) then
 									return nil
 								end
 								if type(rawValue) == "boolean" then
@@ -1491,7 +1474,7 @@ QuestTogether.API = QuestTogether.API or {
 							end
 
 							local questTagType = nil
-							if not (QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(poi.questTagType)) then
+							if CanAccessForeignValue(poi.questTagType) then
 								questTagType = QuestTogether and QuestTogether.SafeToNumber and QuestTogether:SafeToNumber(poi.questTagType)
 									or nil
 								if questTagType ~= nil then
@@ -1981,6 +1964,14 @@ function QuestTogether:IsSecretValue(value)
 	end
 
 	return raw_issecretvalue(value) and true or false
+end
+
+function QuestTogether:CanAccessValue(value)
+	return CanAccessForeignValue(value)
+end
+
+function QuestTogether:CanAccessTable(tableValue)
+	return CanAccessForeignTable(tableValue)
 end
 
 function QuestTogether:IsForbiddenFrame(frame)
@@ -3117,16 +3108,142 @@ function QuestTogether:EnsureQuestSnapshotStore()
 	return snapshotState
 end
 
+local function IsQuestRecurringFrequency(frequency)
+	local frequencyEnum = Enum and Enum.QuestFrequency or nil
+	if not frequencyEnum or frequency == nil then
+		return false
+	end
+
+	return frequency == frequencyEnum.Daily
+		or frequency == frequencyEnum.Weekly
+		or frequency == frequencyEnum.ResetByScheduler
+end
+
+local function GetQuestClassificationFlags(classification)
+	local classificationEnum = Enum and Enum.QuestClassification or nil
+	if not classificationEnum or classification == nil then
+		return {
+			isLegendary = false,
+			isRepeatable = false,
+			isImportant = false,
+			isMeta = false,
+			isCampaign = false,
+			isCalling = false,
+		}
+	end
+
+	return {
+		isLegendary = classification == classificationEnum.Legendary,
+		isRepeatable = classification == classificationEnum.Recurring,
+		isImportant = classification == classificationEnum.Important,
+		isMeta = classification == classificationEnum.Meta,
+		isCampaign = classification == classificationEnum.Campaign,
+		isCalling = classification == classificationEnum.Calling,
+	}
+end
+
+local function ResolveQuestOfferAnnouncementIcon(classification, frequency)
+	local flags = GetQuestClassificationFlags(classification)
+	if flags.isCampaign then
+		return "CampaignAvailableQuestIcon", "atlas"
+	elseif flags.isLegendary then
+		return "legendaryavailablequesticon", "atlas"
+	elseif flags.isCalling then
+		return "CampaignAvailableDailyQuestIcon", "atlas"
+	elseif flags.isImportant then
+		return "importantavailablequesticon", "atlas"
+	elseif flags.isMeta then
+		return "Wrapperavailablequesticon", "atlas"
+	elseif IsQuestRecurringFrequency(frequency) then
+		return "Recurringavailablequesticon", "atlas"
+	elseif flags.isRepeatable then
+		return "Interface/GossipFrame/DailyActiveQuestIcon", "texture"
+	end
+
+	return "Interface/GossipFrame/AvailableQuestIcon", "texture"
+end
+
+local function ResolveQuestActiveAnnouncementIcon(classification, frequency, isComplete)
+	local flags = GetQuestClassificationFlags(classification)
+	if isComplete then
+		if flags.isCampaign then
+			return "CampaignActiveQuestIcon", "atlas"
+		elseif flags.isCalling then
+			return "CampaignActiveDailyQuestIcon", "atlas"
+		elseif IsQuestRecurringFrequency(frequency) then
+			return "Recurringactivequesticon", "atlas"
+		elseif flags.isLegendary then
+			return "legendaryactivequesticon", "atlas"
+		elseif flags.isImportant then
+			return "importantactivequesticon", "atlas"
+		elseif flags.isMeta then
+			return "Wrapperactivequesticon", "atlas"
+		end
+
+		return "Interface/GossipFrame/ActiveQuestIcon", "texture"
+	end
+
+	if flags.isCampaign or flags.isCalling then
+		return "CampaignInProgressQuestIcon", "atlas"
+	elseif IsQuestRecurringFrequency(frequency) then
+		return "RepeatableInProgressquesticon", "atlas"
+	elseif flags.isLegendary then
+		return "legendaryInProgressquesticon", "atlas"
+	elseif flags.isImportant then
+		return "importantInProgressquesticon", "atlas"
+	elseif flags.isMeta then
+		return "WrapperInProgressquesticon", "atlas"
+	end
+
+	return "SideInProgressquesticon", "atlas"
+end
+
+local function GetQuestAnnouncementLookInfo(addon, questId)
+	local numericQuestId = addon and addon.NormalizeQuestID and addon:NormalizeQuestID(questId) or nil
+	if not numericQuestId then
+		return nil, nil
+	end
+
+	local classification = addon.API and addon.API.GetQuestClassification and addon.API.GetQuestClassification(numericQuestId)
+		or nil
+	local frequency = addon.API and addon.API.GetQuestFrequency and addon.API.GetQuestFrequency(numericQuestId) or nil
+	if classification ~= nil and frequency ~= nil then
+		return classification, frequency
+	end
+
+	local questLogIndex = addon.API and addon.API.GetQuestLogIndexForQuestID
+		and addon.API.GetQuestLogIndexForQuestID(numericQuestId)
+		or nil
+	if not questLogIndex then
+		return classification, frequency
+	end
+
+	local questInfo = addon.API and addon.API.GetQuestLogInfo and addon.API.GetQuestLogInfo(questLogIndex) or nil
+	if type(questInfo) ~= "table" then
+		return classification, frequency
+	end
+
+	if classification == nil then
+		classification = SanitizeQuestInfoEnumValue(questInfo.questClassification)
+	end
+	if frequency == nil then
+		frequency = SanitizeQuestInfoEnumValue(questInfo.frequency)
+	end
+
+	return classification, frequency
+end
+
 function QuestTogether:GetQuestStateAnnouncementIconInfo(eventType, questId)
 	local numericQuestId = self:NormalizeQuestID(questId)
 	if numericQuestId and self.API then
+		local classification, frequency = GetQuestAnnouncementLookInfo(self, numericQuestId)
 		local iconAsset = nil
 		local iconKind = nil
-		if eventType == "QUEST_ACCEPTED" and self.API.GetQuestOfferAnnouncementIconInfo then
-			iconAsset, iconKind = self.API.GetQuestOfferAnnouncementIconInfo(numericQuestId)
-		elseif self.API.GetQuestActiveAnnouncementIconInfo then
+		if eventType == "QUEST_ACCEPTED" then
+			iconAsset, iconKind = ResolveQuestOfferAnnouncementIcon(classification, frequency)
+		else
 			local useCompleteIcon = eventType == "QUEST_COMPLETED" or eventType == "QUEST_READY_TO_TURN_IN"
-			iconAsset, iconKind = self.API.GetQuestActiveAnnouncementIconInfo(numericQuestId, useCompleteIcon)
+			iconAsset, iconKind = ResolveQuestActiveAnnouncementIcon(classification, frequency, useCompleteIcon)
 		end
 		if type(iconAsset) == "string" and iconAsset ~= "" then
 			return iconAsset, iconKind
@@ -3147,18 +3264,12 @@ function QuestTogether:GetWorldQuestAnnouncementIconInfo(questId)
 		return "worldquest-icon", "atlas"
 	end
 
-	local tagInfo = self.API and self.API.GetQuestTagInfo and self.API.GetQuestTagInfo(numericQuestId) or nil
-	if type(tagInfo) == "table" and self.API and self.API.GetWorldQuestAtlasInfo then
-		local atlas = self.API.GetWorldQuestAtlasInfo(numericQuestId, tagInfo, false)
+	local questTagType = self.API and self.API.GetQuestPoiTagType and self.API.GetQuestPoiTagType(numericQuestId) or nil
+	if questTagType ~= nil and self.API and self.API.GetQuestTagAtlas then
+		local atlas = self.API.GetQuestTagAtlas(nil, questTagType)
 		if type(atlas) == "string" and atlas ~= "" then
 			return atlas, "atlas"
 		end
-	end
-
-	local poiIcon = self.API and self.API.GetQuestDetailsThemePoiIcon and self.API.GetQuestDetailsThemePoiIcon(numericQuestId)
-		or nil
-	if type(poiIcon) == "string" and poiIcon ~= "" then
-		return poiIcon, "atlas"
 	end
 
 	return "worldquest-icon", "atlas"
@@ -3166,21 +3277,8 @@ end
 
 function QuestTogether:GetBonusObjectiveAnnouncementIconInfo(eventType, questId)
 	local numericQuestId = self:NormalizeQuestID(questId)
-	if numericQuestId then
-		local tagInfo = self.API and self.API.GetQuestTagInfo and self.API.GetQuestTagInfo(numericQuestId) or nil
-		if type(tagInfo) == "table" and self.API and self.API.GetQuestTagAtlas then
-			local atlas = self.API.GetQuestTagAtlas(tagInfo.tagID, tagInfo.worldQuestType)
-			if type(atlas) == "string" and atlas ~= "" then
-				return atlas, "atlas"
-			end
-		end
-
-		local poiIcon = self.API and self.API.GetQuestDetailsThemePoiIcon
-				and self.API.GetQuestDetailsThemePoiIcon(numericQuestId)
-			or nil
-		if type(poiIcon) == "string" and poiIcon ~= "" then
-			return poiIcon, "atlas"
-		end
+	if not numericQuestId then
+		return "Bonus-Objective-Star", "atlas"
 	end
 
 	local questStateEventType = eventType
@@ -5820,8 +5918,11 @@ function QuestTogether:WatchQuest(questId, questInfo)
 	local numObjectives = self.API and self.API.GetNumQuestLeaderBoards and self.API.GetNumQuestLeaderBoards(questLogIndex)
 		or 0
 	for objectiveIndex = 1, numObjectives do
-		local objectiveText, objectiveType, _, currentValue =
-			self.API.GetQuestObjectiveInfo and self.API.GetQuestObjectiveInfo(numericQuestId, objectiveIndex, false)
+		local objectiveText, objectiveType, _, currentValue = nil, nil, nil, nil
+		if self.API and self.API.GetQuestObjectiveInfo then
+			objectiveText, objectiveType, _, currentValue =
+				self.API.GetQuestObjectiveInfo(numericQuestId, objectiveIndex, false)
+		end
 		if objectiveText == nil and objectiveType == nil and currentValue == nil then
 			objectiveText = ""
 		end
