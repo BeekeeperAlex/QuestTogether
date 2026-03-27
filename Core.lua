@@ -28,6 +28,9 @@ local raw_canaccesstable = type(canaccesstable) == "function" and canaccesstable
 local DEBUG_WINDOW_TITLE = "QuestTogether Debug Window"
 local DEBUG_WINDOW_HINT =
 	"Shared QuestTogether debug window. Use the category dropdown and Search field to filter. Quotes force exact phrase matches. Click Select All, then Ctrl+C."
+local COPYABLE_WINDOW_DEFAULT_CONTROL_HEIGHT = 24
+local COPYABLE_WINDOW_DEBUG_CONTROL_HEIGHT = 52
+local COPYABLE_WINDOW_MIN_WIDTH = 400
 
 local function NormalizeQuestInfoFlagValue(rawValue)
 	if QuestTogether and QuestTogether.IsSecretValue and QuestTogether:IsSecretValue(rawValue) then
@@ -5208,21 +5211,44 @@ function QuestTogether:RefreshCopyableWindow()
 	if frame.titleLabel then
 		frame.titleLabel:SetText(titleText)
 	end
-		if frame.hintLabel then
-			frame.hintLabel:SetText(hintText)
-			frame.hintLabel:SetShown(hintText ~= "")
+	if frame.hintLabel then
+		frame.hintLabel:SetText(hintText)
+		frame.hintLabel:SetShown(hintText ~= "")
+	end
+	if frame.controlFrame then
+		frame.controlFrame:ClearAllPoints()
+		if hintText ~= "" then
+			frame.controlFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -54)
+			frame.controlFrame:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -54)
+		else
+			frame.controlFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -34)
+			frame.controlFrame:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -34)
 		end
-		if frame.textInset then
-			frame.textInset:ClearAllPoints()
+		frame.controlFrame:SetHeight(
+			isDebugLogWindow and COPYABLE_WINDOW_DEBUG_CONTROL_HEIGHT or COPYABLE_WINDOW_DEFAULT_CONTROL_HEIGHT
+		)
+	end
+	if frame.filterRow then
+		frame.filterRow:SetShown(isDebugLogWindow)
+	end
+	if frame.textInset then
+		frame.textInset:ClearAllPoints()
+		if frame.controlFrame then
+			frame.textInset:SetPoint("TOPLEFT", frame.controlFrame, "BOTTOMLEFT", -2, -8)
+			frame.textInset:SetPoint("TOPRIGHT", frame.controlFrame, "BOTTOMRIGHT", 2, -8)
+		else
 			if hintText ~= "" then
 				frame.textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -54)
-				frame.textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
+				frame.textInset:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -10, -54)
 			else
 				frame.textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -34)
-				frame.textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
+				frame.textInset:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -10, -34)
 			end
 		end
-		local editBoxWidth = math.max(1, frame.scrollFrame:GetWidth() - 18)
+		frame.textInset:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 24)
+		frame.textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 24)
+	end
+	local editBoxWidth = math.max(1, frame.scrollFrame:GetWidth() - 18)
 	frame.editBox:SetWidth(editBoxWidth)
 	if frame.editBox.Instructions and frame.editBox.Instructions.SetWidth then
 		frame.editBox.Instructions:SetWidth(editBoxWidth)
@@ -5334,9 +5360,27 @@ function QuestTogether:EnsureCopyableWindow()
 	hint:SetJustifyH("LEFT")
 	hint:SetText("")
 
-		local textInset = CreateFrame("Frame", nil, frame, "InsetFrameTemplate3")
-		textInset:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -54)
-		textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 44)
+	local controlFrame = CreateFrame("Frame", nil, frame)
+	controlFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -34)
+	controlFrame:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -34)
+	controlFrame:SetHeight(COPYABLE_WINDOW_DEFAULT_CONTROL_HEIGHT)
+
+	local actionRow = CreateFrame("Frame", nil, controlFrame)
+	actionRow:SetPoint("TOPLEFT", controlFrame, "TOPLEFT", 0, 0)
+	actionRow:SetPoint("TOPRIGHT", controlFrame, "TOPRIGHT", 0, 0)
+	actionRow:SetHeight(24)
+
+	local filterRow = CreateFrame("Frame", nil, controlFrame)
+	filterRow:SetPoint("TOPLEFT", actionRow, "BOTTOMLEFT", 0, -6)
+	filterRow:SetPoint("TOPRIGHT", actionRow, "BOTTOMRIGHT", 0, -6)
+	filterRow:SetHeight(22)
+	filterRow:Hide()
+
+	local textInset = CreateFrame("Frame", nil, frame, "InsetFrameTemplate3")
+	textInset:SetPoint("TOPLEFT", controlFrame, "BOTTOMLEFT", -2, -8)
+	textInset:SetPoint("TOPRIGHT", controlFrame, "BOTTOMRIGHT", 2, -8)
+	textInset:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 24)
+	textInset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 24)
 
 	local scrollFrame = CreateFrame("ScrollFrame", nil, textInset, "InputScrollFrameTemplate")
 	scrollFrame:SetPoint("TOPLEFT", textInset, "TOPLEFT", 6, -6)
@@ -5404,17 +5448,17 @@ function QuestTogether:EnsureCopyableWindow()
 		scrollFrame.CharCount:Hide()
 	end
 
-	local selectAllButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	selectAllButton:SetSize(96, 24)
-	selectAllButton:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 12)
+	local selectAllButton = CreateFrame("Button", nil, actionRow, "UIPanelButtonTemplate")
+	selectAllButton:SetSize(80, 24)
+	selectAllButton:SetPoint("TOPLEFT", actionRow, "TOPLEFT", 0, 0)
 	selectAllButton:SetText("Select All")
 	selectAllButton:SetScript("OnClick", function()
 		editBox:SetFocus()
 		editBox:HighlightText()
 	end)
 
-	local clearButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	clearButton:SetSize(80, 24)
+	local clearButton = CreateFrame("Button", nil, actionRow, "UIPanelButtonTemplate")
+	clearButton:SetSize(64, 24)
 	clearButton:SetPoint("LEFT", selectAllButton, "RIGHT", 8, 0)
 	clearButton:SetText("Clear")
 	clearButton:SetScript("OnClick", function()
@@ -5424,8 +5468,8 @@ function QuestTogether:EnsureCopyableWindow()
 		end
 	end)
 
-	local reloadButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	reloadButton:SetSize(80, 24)
+	local reloadButton = CreateFrame("Button", nil, actionRow, "UIPanelButtonTemplate")
+	reloadButton:SetSize(76, 24)
 	reloadButton:SetPoint("LEFT", clearButton, "RIGHT", 8, 0)
 	reloadButton:SetText("Reload UI")
 	reloadButton:SetScript("OnClick", function()
@@ -5435,8 +5479,8 @@ function QuestTogether:EnsureCopyableWindow()
 	end)
 	reloadButton:Hide()
 
-	local runTestsButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	runTestsButton:SetSize(96, 24)
+	local runTestsButton = CreateFrame("Button", nil, actionRow, "UIPanelButtonTemplate")
+	runTestsButton:SetSize(84, 24)
 	runTestsButton:SetPoint("LEFT", reloadButton, "RIGHT", 8, 0)
 	runTestsButton:SetText("Run Tests")
 	runTestsButton:SetScript("OnClick", function()
@@ -5445,50 +5489,42 @@ function QuestTogether:EnsureCopyableWindow()
 		end
 	end)
 
-	local closeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-	closeButton:SetSize(80, 24)
-	closeButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, 12)
-	closeButton:SetText("Close")
-	closeButton:SetScript("OnClick", function()
-		frame:Hide()
-	end)
-
-	local categoryFilterLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	categoryFilterLabel:SetPoint("LEFT", runTestsButton, "RIGHT", 12, 0)
+	local categoryFilterLabel = filterRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	categoryFilterLabel:SetPoint("LEFT", filterRow, "LEFT", 0, 0)
 	categoryFilterLabel:SetText("Category:")
 	categoryFilterLabel:Hide()
 
-	local categoryFilterDropdown = CreateFrame("Frame", nil, frame, "UIDropDownMenuTemplate")
+	local categoryFilterDropdown = CreateFrame("Frame", nil, filterRow, "UIDropDownMenuTemplate")
 	categoryFilterDropdown:SetPoint("LEFT", categoryFilterLabel, "RIGHT", -10, -2)
-		categoryFilterDropdown.initializeMenu = function(_, level)
-			local categories = QuestTogether:GetDebugLogAvailableCategories()
-			local activeCategory = QuestTogether:GetDebugLogCategoryFilter()
-			for _, category in ipairs(categories) do
-				local selectedCategory = category
-				local info = UIDropDownMenu_CreateInfo()
-				info.text = selectedCategory
-				info.checked = selectedCategory == activeCategory
-				info.func = function()
-					QuestTogether:SetDebugLogCategoryFilter(selectedCategory)
-					CloseDropDownMenus()
-				end
-				UIDropDownMenu_AddButton(info, level)
+	categoryFilterDropdown.initializeMenu = function(_, level)
+		local categories = QuestTogether:GetDebugLogAvailableCategories()
+		local activeCategory = QuestTogether:GetDebugLogCategoryFilter()
+		for _, category in ipairs(categories) do
+			local selectedCategory = category
+			local info = UIDropDownMenu_CreateInfo()
+			info.text = selectedCategory
+			info.checked = selectedCategory == activeCategory
+			info.func = function()
+				QuestTogether:SetDebugLogCategoryFilter(selectedCategory)
+				CloseDropDownMenus()
 			end
+			UIDropDownMenu_AddButton(info, level)
+		end
 	end
-	UIDropDownMenu_SetWidth(categoryFilterDropdown, 120)
+	UIDropDownMenu_SetWidth(categoryFilterDropdown, 110)
 	UIDropDownMenu_Initialize(categoryFilterDropdown, categoryFilterDropdown.initializeMenu)
 	categoryFilterDropdown:Hide()
 
-	local prefixFilterLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	prefixFilterLabel:SetPoint("LEFT", categoryFilterDropdown, "RIGHT", 2, 0)
+	local prefixFilterLabel = filterRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	prefixFilterLabel:SetPoint("LEFT", categoryFilterDropdown, "RIGHT", 6, 0)
 	prefixFilterLabel:SetText("Search:")
 	prefixFilterLabel:Hide()
 
-	local prefixFilterEditBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+	local prefixFilterEditBox = CreateFrame("EditBox", nil, filterRow, "InputBoxTemplate")
 	prefixFilterEditBox:SetAutoFocus(false)
 	prefixFilterEditBox:SetHeight(20)
 	prefixFilterEditBox:SetPoint("LEFT", prefixFilterLabel, "RIGHT", 6, 0)
-	prefixFilterEditBox:SetPoint("RIGHT", closeButton, "LEFT", -12, 0)
+	prefixFilterEditBox:SetPoint("RIGHT", filterRow, "RIGHT", -6, 0)
 	prefixFilterEditBox:SetScript("OnEscapePressed", function(self)
 		self:ClearFocus()
 	end)
@@ -5503,14 +5539,16 @@ function QuestTogether:EnsureCopyableWindow()
 	end)
 	prefixFilterEditBox:Hide()
 
-		frame.scrollFrame = scrollFrame
-		frame.textInset = textInset
+	frame.scrollFrame = scrollFrame
+	frame.textInset = textInset
 	frame.editBox = editBox
+	frame.controlFrame = controlFrame
+	frame.filterRow = filterRow
+	frame.actionRow = actionRow
 	frame.selectAllButton = selectAllButton
 	frame.clearButton = clearButton
 	frame.reloadButton = reloadButton
 	frame.runTestsButton = runTestsButton
-	frame.closeButton = closeButton
 	frame.categoryFilterLabel = categoryFilterLabel
 	frame.categoryFilterDropdown = categoryFilterDropdown
 	frame.prefixFilterLabel = prefixFilterLabel
@@ -5520,9 +5558,9 @@ function QuestTogether:EnsureCopyableWindow()
 
 	frame:SetResizable(true)
 	if frame.SetResizeBounds then
-		frame:SetResizeBounds(720, 420, 1400, 1000)
+		frame:SetResizeBounds(COPYABLE_WINDOW_MIN_WIDTH, 420, 1400, 1000)
 	else
-		frame:SetMinResize(720, 420)
+		frame:SetMinResize(COPYABLE_WINDOW_MIN_WIDTH, 420)
 	end
 	frame:SetScript("OnSizeChanged", function()
 		QuestTogether:RefreshCopyableWindow()

@@ -123,6 +123,9 @@ function QuestTogether:PlayLocalCompletionEmote(emoteToken)
 	if not self:GetOption("emoteOnQuestCompletion") then
 		return false
 	end
+	if self.suppressLocalAnnouncementDisplayDuringTests then
+		return false
+	end
 	self.API.DoEmote(emoteToken, self:GetPlayerName())
 	return true
 end

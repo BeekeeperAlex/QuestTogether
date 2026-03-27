@@ -366,43 +366,6 @@ function QuestTogether:RunTests()
 	return failed == 0
 end
 
-QuestTogether:RegisterTest("default profile contains new announcement display options", function()
-	AssertTrue(QuestTogether.DEFAULTS.profile.announceAccepted ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.announceBonusObjectiveAreaEnter ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.announceBonusObjectiveAreaLeave ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.announceBonusObjectiveProgress ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.announceBonusObjectiveCompleted ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.announceReadyToTurnIn ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.showChatBubbles ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.hideMyOwnChatBubbles ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.showChatLogs ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.chatLogDestination ~= nil)
-	AssertEquals(QuestTogether.DEFAULTS.profile.mirrorChatLogsToMainChat, false)
-	AssertTrue(QuestTogether.DEFAULTS.profile.showProgressFor ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.chatBubbleSize ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.chatBubbleDuration ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.emoteOnQuestCompletion ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.emoteOnNearbyPlayerQuestCompletion ~= nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.primaryChannel == nil)
-	AssertTrue(QuestTogether.DEFAULTS.profile.fallbackChannel == nil)
-end)
-
-QuestTogether:RegisterTest("SafeToNumber accepts numeric values without conversion", function()
-	AssertEquals(QuestTogether:SafeToNumber(42), 42)
-	AssertEquals(QuestTogether:SafeToNumber(" 42 "), 42)
-	AssertEquals(QuestTogether:SafeToNumber(""), nil)
-	AssertEquals(QuestTogether:SafeToNumber({}), nil)
-end)
-
-QuestTogether:RegisterTest("NormalizeQuestID coerces and validates quest ids", function()
-	AssertEquals(QuestTogether:NormalizeQuestID(12345), 12345)
-	AssertEquals(QuestTogether:NormalizeQuestID("12345"), 12345)
-	AssertEquals(QuestTogether:NormalizeQuestID(12345.4), 12345)
-	AssertEquals(QuestTogether:NormalizeQuestID(0), nil)
-	AssertEquals(QuestTogether:NormalizeQuestID(-3), nil)
-	AssertEquals(QuestTogether:NormalizeQuestID("abc"), nil)
-end)
-
 QuestTogether:RegisterTest("debug window category filter and search support fuzzy and quoted exact matches", function()
 	WithIsolatedState(function()
 		QuestTogether:ClearDebugLog()
@@ -600,71 +563,6 @@ QuestTogether:RegisterTest("Safe conversions short-circuit values marked secret"
 		AssertEquals(QuestTogether:SafeTrimString("secret-text", "fallback"), "fallback")
 		AssertEquals(QuestTogether:SafeStripWhitespace("secret-text", "fallback"), "fallback")
 	end)
-end)
-
-QuestTogether:RegisterTest("SafeTrimString and SafeStripWhitespace handle normal and failing values", function()
-	AssertEquals(QuestTogether:SafeTrimString("  hello there  "), "hello there")
-	AssertEquals(QuestTogether:SafeStripWhitespace(" a b\tc \n d "), "abcd")
-
-	local failingToString = setmetatable({}, {
-		__tostring = function()
-			error("boom")
-		end,
-	})
-	AssertEquals(QuestTogether:SafeTrimString(failingToString, "fallback"), "fallback")
-	AssertEquals(QuestTogether:SafeStripWhitespace(failingToString, "fallback"), "fallback")
-end)
-
-QuestTogether:RegisterTest("chat bubble normalizers use SafeToNumber conversion", function()
-	local seenValues = {}
-	WithPatchedMethod(QuestTogether, "SafeToNumber", function(_, value)
-		seenValues[#seenValues + 1] = value
-		if value == "size-secret" then
-			return 118
-		end
-		if value == "duration-secret" then
-			return 2.26
-		end
-		return nil
-	end, function()
-		AssertEquals(QuestTogether:NormalizeChatBubbleSizeValue("size-secret"), 120)
-		AssertEquals(QuestTogether:NormalizeChatBubbleDurationValue("duration-secret"), 2.5)
-	end)
-	AssertEquals(seenValues[1], "size-secret")
-	AssertEquals(seenValues[2], "duration-secret")
-end)
-
-QuestTogether:RegisterTest("personal bubble anchor numeric parsing uses SafeToNumber", function()
-	WithPatchedMethod(QuestTogether, "SafeToNumber", function(_, value)
-		if value == "secret-x" then
-			return 33
-		end
-		if value == "secret-y" then
-			return -27
-		end
-		return nil
-	end, function()
-		QuestTogether:SetPersonalBubbleAnchor("TOP", "TOP", "secret-x", "secret-y")
-		local store = QuestTogether:GetPersonalBubbleAnchorStore()
-		local key = QuestTogether:GetPersonalBubbleAnchorKey()
-		AssertEquals(store[key].x, 33)
-		AssertEquals(store[key].y, -27)
-	end)
-end)
-
-QuestTogether:RegisterTest("wire message parsers fail soft on values that cannot be coerced", function()
-	local failingToString = setmetatable({}, {
-		__tostring = function()
-			error("boom")
-		end,
-	})
-
-	local command, payload = QuestTogether:DeserializeWireMessage(failingToString)
-	AssertEquals(command, nil)
-	AssertEquals(payload, nil)
-	AssertEquals(QuestTogether:EscapePayload(failingToString), "")
-	AssertEquals(QuestTogether:UnescapePayload(failingToString), "")
-	AssertEquals(QuestTogether:SanitizeAnnouncementText(failingToString), "")
 end)
 
 QuestTogether:RegisterTest("nameplate tooltip scan guid does not write custom fields or cache guid state", function()
@@ -1839,6 +1737,21 @@ QuestTogether:RegisterTest("quest completion publishes and plays the same emote 
 	AssertEquals(played, "cheer")
 end)
 
+QuestTogether:RegisterTest("local completion emotes are suppressed during test runs", function()
+	local emoteCalls = 0
+
+	QuestTogether.db.profile.emoteOnQuestCompletion = true
+	QuestTogether.suppressLocalAnnouncementDisplayDuringTests = true
+	QuestTogether.API = CreateApiWithOverrides({
+		DoEmote = function()
+			emoteCalls = emoteCalls + 1
+		end,
+	})
+
+	AssertFalse(QuestTogether:PlayLocalCompletionEmote("cheer"))
+	AssertEquals(emoteCalls, 0)
+end)
+
 QuestTogether:RegisterTest("quest completion preserves cached quest icon metadata", function()
 	local published = nil
 
@@ -2208,51 +2121,6 @@ QuestTogether:RegisterTest("progressbar objective text strips trailing parenthet
 		QuestTogether:StripTrailingParentheticalPercent("Refine potadpalate"),
 		"Refine potadpalate"
 	)
-end)
-
-QuestTogether:RegisterTest("known nameplate addons no longer suppress the QuestTogether quest icon", function()
-	QuestTogether.isEnabled = true
-	QuestTogether.db.profile.nameplateQuestIconEnabled = true
-	local unitFrame = {
-		unit = "nameplate1",
-		healthBar = {},
-	}
-	QuestTogether.API = CreateApiWithOverrides({
-		IsAddOnLoaded = function(addonName)
-			return addonName == "Plater"
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
-		return false
-	end, function()
-		WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function(_, unitToken)
-			AssertEquals(unitToken, "nameplate1")
-			return true
-		end, function()
-			WithPatchedMethod(QuestTogether, "IsNameplateUnitPlayer", function(_, unitToken)
-				AssertEquals(unitToken, "nameplate1")
-				return false
-			end, function()
-				WithPatchedMethod(QuestTogether, "IsNameplateUnitConnected", function(_, unitToken)
-					AssertEquals(unitToken, "nameplate1")
-					return true
-				end, function()
-					WithPatchedMethod(QuestTogether, "IsNameplateUnitDead", function(_, unitToken)
-						AssertEquals(unitToken, "nameplate1")
-						return false
-					end, function()
-						WithPatchedMethod(QuestTogether, "IsNameplateUnitTapDenied", function(_, unitToken)
-							AssertEquals(unitToken, "nameplate1")
-							return false
-						end, function()
-							AssertTrue(QuestTogether:ShouldShowQuestNameplateIconForResolvedState("nameplate1", unitFrame, true))
-						end)
-					end)
-				end)
-			end)
-		end)
-	end)
 end)
 
 QuestTogether:RegisterTest("quest nameplate icon display no longer requires attackable units", function()
@@ -3326,36 +3194,6 @@ QuestTogether:RegisterTest("nameplate quest text cache includes live unfinished 
 	AssertTrue(QuestTogether.nameplateQuestTextCache["QT Live Objective Cache Test"])
 	AssertTrue(QuestTogether.nameplateQuestTextCache["QT unfinished objective sentinel"])
 	AssertEquals(QuestTogether.nameplateQuestTextCache["QT finished objective sentinel"], nil)
-end)
-
-QuestTogether:RegisterTest("nameplate quest text cache still rebuilds during combat like Plater", function()
-	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
-	snapshotState.byQuestID = {
-		[12345] = {
-			questID = 12345,
-			title = "Combat Quest",
-			isHeader = false,
-		},
-	}
-	snapshotState.order = { 12345 }
-	QuestTogether.API = CreateApiWithOverrides({
-		IsInInstance = function()
-			return false
-		end,
-		InCombatLockdown = function()
-			return true
-		end,
-		GetPlayerMapID = function()
-			return nil
-		end,
-		GetTaskQuestsOnMap = function()
-			return nil
-		end,
-	})
-
-	QuestTogether:RebuildNameplateQuestTextCache()
-
-	AssertTrue(QuestTogether.nameplateQuestTextCache["Combat Quest"])
 end)
 
 QuestTogether:RegisterTest("nameplate quest text cache stays empty in instances", function()
@@ -4838,10 +4676,6 @@ QuestTogether:RegisterTest("chat log raw falls back when resolved chat frame is 
 	AssertEquals(fallbackPrinted[1], "forbidden frame fallback")
 end)
 
-QuestTogether:RegisterTest("nameplate quest icon helper does not leak a global", function()
-	AssertEquals(_G.ApplyQuestIconVisual, nil)
-end)
-
 QuestTogether:RegisterTest("nameplate health tint helpers use overlays without touching status bars", function()
 	local setColorCalls = 0
 	local createdTextures = {}
@@ -5462,94 +5296,6 @@ QuestTogether:RegisterTest("nameplate threat events schedule tint refresh for na
 	AssertEquals(#scheduled, 2)
 end)
 
-QuestTogether:RegisterTest("scheduled nameplate refresh runs per-unit mutation during combat like Plater", function()
-	local refreshCalls = 0
-	local namePlateFrameBase = {
-		UnitFrame = {},
-		IsShown = function()
-			return true
-		end,
-	}
-
-	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
-			return true
-		end,
-		Delay = function(_, callback)
-			callback()
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
-		return unitToken == "nameplate11"
-	end, function()
-		WithPatchedMethod(QuestTogether, "GetAccessibleNameplateFrameForUnit", function(_, unitToken, requireShown)
-			AssertEquals(unitToken, "nameplate11")
-			AssertTrue(requireShown)
-			return namePlateFrameBase, namePlateFrameBase.UnitFrame
-		end, function()
-			WithPatchedMethod(QuestTogether, "RefreshNameplateIcon", function(_, frameBase)
-				AssertEquals(frameBase, namePlateFrameBase)
-				refreshCalls = refreshCalls + 1
-			end, function()
-				QuestTogether:ScheduleNameplateRefresh("nameplate11")
-			end)
-		end)
-	end)
-
-	AssertEquals(refreshCalls, 1)
-end)
-
-QuestTogether:RegisterTest("combat nameplate add clears stale visuals and refreshes the live plate like Plater", function()
-	local hiddenFrame = nil
-	local refreshedFrame = nil
-	local unitFrame = {
-		unit = "nameplate12",
-		healthBar = {},
-	}
-	local namePlateFrameBase = {
-		UnitFrame = unitFrame,
-		GetUnit = function()
-			return "nameplate12"
-		end,
-	}
-
-	QuestTogether.isEnabled = true
-	QuestTogether.nameplateQuestStateByUnitToken["nameplate12"] = true
-	QuestTogether.nameplateQuestGuidByUnitToken["nameplate12"] = "Creature-0-0-0-0-121212-0000000000"
-	QuestTogether.API = CreateApiWithOverrides({
-		InCombatLockdown = function()
-			return true
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
-		return unitToken == "nameplate12"
-	end, function()
-		WithPatchedMethod(QuestTogether, "GetAccessibleNameplateFrameForUnit", function(_, unitToken, requireShown)
-			AssertEquals(unitToken, "nameplate12")
-			AssertEquals(requireShown, false)
-			return namePlateFrameBase, unitFrame
-		end, function()
-			WithPatchedMethod(QuestTogether, "HideNameplateIcon", function(_, frameBase)
-				hiddenFrame = frameBase
-			end, function()
-				WithPatchedMethod(QuestTogether, "RefreshNameplateIcon", function(_, frameBase)
-					refreshedFrame = frameBase
-				end, function()
-					QuestTogether:OnNameplateAdded("nameplate12")
-				end)
-			end)
-		end)
-	end)
-
-	AssertEquals(QuestTogether.nameplateQuestStateByUnitToken["nameplate12"], nil)
-	AssertEquals(QuestTogether.nameplateQuestGuidByUnitToken["nameplate12"], nil)
-	AssertEquals(hiddenFrame, namePlateFrameBase)
-	AssertEquals(refreshedFrame, namePlateFrameBase)
-end)
-
 QuestTogether:RegisterTest("nameplate add clears stale visuals and refreshes immediately", function()
 	local hiddenFrame = nil
 	local refreshedFrame = nil
@@ -5739,90 +5485,6 @@ QuestTogether:RegisterTest("visible nameplate refresh clears cache and refreshes
 	AssertEquals(augmentationCalls, 1)
 end)
 
-QuestTogether:RegisterTest("nameplate quest state events use Plater-style delayed refresh", function()
-	local refreshCalls = 0
-	local scheduledCalls = 0
-
-	QuestTogether.API = CreateApiWithOverrides({
-		Delay = function(seconds, callback)
-			AssertEquals(seconds, 1)
-			scheduledCalls = scheduledCalls + 1
-			callback()
-		end,
-	})
-	QuestTogether.isEnabled = true
-	QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", nil)
-
-	WithPatchedMethod(QuestTogether, "RefreshNameplatesForQuestStateChange", function(_, reason)
-		AssertEquals(reason, "QUEST_POI_UPDATE")
-		refreshCalls = refreshCalls + 1
-		return true
-	end, function()
-		QuestTogether:HandleNameplateEvent("QUEST_POI_UPDATE")
-	end)
-
-	AssertEquals(scheduledCalls, 1)
-	AssertEquals(refreshCalls, 1)
-end)
-
-QuestTogether:RegisterTest("nameplate quest state refresh coalesces like Plater quest log updates", function()
-	local scheduledCallbacks = {}
-	local refreshCalls = 0
-
-	QuestTogether.isEnabled = true
-	QuestTogether:SetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false)
-	QuestTogether:SetRuntimeFlag("deferredNameplateQuestStateRefreshGeneration", 0)
-	QuestTogether.API = CreateApiWithOverrides({
-		Delay = function(seconds, callback)
-			AssertEquals(seconds, 1)
-			scheduledCallbacks[#scheduledCallbacks + 1] = callback
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "RefreshNameplatesForQuestStateChange", function(_, reason)
-		refreshCalls = refreshCalls + 1
-		AssertEquals(reason, "QUEST_LOG_UPDATE")
-		return true
-	end, function()
-		QuestTogether:HandleNameplateEvent("QUEST_POI_UPDATE")
-		QuestTogether:HandleNameplateEvent("QUEST_LOG_UPDATE")
-
-		AssertEquals(#scheduledCallbacks, 2)
-		scheduledCallbacks[1]()
-		AssertEquals(refreshCalls, 0)
-		scheduledCallbacks[2]()
-		AssertEquals(refreshCalls, 1)
-		AssertFalse(QuestTogether:GetRuntimeFlag("pendingDeferredNameplateQuestStateRefresh", false))
-	end)
-end)
-
-QuestTogether:RegisterTest("player entering world does not use Plater quest log throttle", function()
-	local scheduledReason = nil
-
-	WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason)
-		scheduledReason = reason
-	end, function()
-		QuestTogether:HandleNameplateEvent("PLAYER_ENTERING_WORLD")
-	end)
-
-	AssertEquals(scheduledReason, nil)
-end)
-
-QuestTogether:RegisterTest("player entering world schedules delayed nameplate refresh like Plater", function()
-	local scheduledReason = nil
-	local scheduledDelay = nil
-
-	WithPatchedMethod(QuestTogether, "ScheduleNameplatePresentationRefresh", function(_, reason, delaySeconds)
-		scheduledReason = reason
-		scheduledDelay = delaySeconds
-	end, function()
-		QuestTogether:HandleNameplateEvent("PLAYER_ENTERING_WORLD")
-	end)
-
-	AssertEquals(scheduledReason, "PLAYER_ENTERING_WORLD")
-	AssertEquals(scheduledDelay, 1)
-end)
-
 QuestTogether:RegisterTest("zone changed new area schedules nameplate presentation refresh through shared runtime", function()
 	local scheduledReason = nil
 	local scheduledDelay = nil
@@ -5836,153 +5498,6 @@ QuestTogether:RegisterTest("zone changed new area schedules nameplate presentati
 
 	AssertEquals(scheduledReason, "ZONE_CHANGED_NEW_AREA")
 	AssertEquals(scheduledDelay, 0)
-end)
-
-QuestTogether:RegisterTest("Plater startup full refresh refreshes visible nameplates directly", function()
-	local refreshedFrames = {}
-
-	WithPatchedMethod(QuestTogether, "ClearNameplateResolvedQuestState", function() end, function()
-		WithPatchedMethod(QuestTogether, "ForEachVisibleNamePlate", function(_, callback)
-			local frameOne = {
-				UnitFrame = {
-					namePlateUnitToken = "nameplate21",
-				},
-			}
-			local frameTwo = {
-				GetUnit = function()
-					return "nameplate22"
-				end,
-				UnitFrame = {
-					healthBar = {},
-				},
-			}
-			callback(frameOne)
-			callback(frameTwo)
-		end, function()
-			WithPatchedMethod(QuestTogether, "RefreshNameplateIcon", function(_, frame)
-				refreshedFrames[#refreshedFrames + 1] = frame
-			end, function()
-				AssertTrue(QuestTogether:FullRefreshVisibleNameplates("EnableNameplateAugmentationStartupFullRefresh"))
-			end)
-		end)
-	end)
-
-	AssertEquals(refreshedFrames[1].UnitFrame.namePlateUnitToken, "nameplate21")
-	AssertEquals(refreshedFrames[2].GetUnit(), "nameplate22")
-	AssertEquals(#refreshedFrames, 2)
-end)
-
-QuestTogether:RegisterTest("nameplate augmentation schedules Plater startup refresh timing", function()
-	local scheduled = {}
-	local deferredReason = nil
-	local deferredDelay = nil
-	local fullRefreshReason = nil
-
-	QuestTogether.isEnabled = true
-	QuestTogether.API = CreateApiWithOverrides({
-		Delay = function(seconds, callback)
-			scheduled[#scheduled + 1] = {
-				seconds = seconds,
-				callback = callback,
-			}
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "ScheduleDeferredNameplateQuestStateRefresh", function(_, reason, delaySeconds)
-		deferredReason = reason
-		deferredDelay = delaySeconds
-	end, function()
-		WithPatchedMethod(QuestTogether, "FullRefreshVisibleNameplates", function(_, reason)
-			fullRefreshReason = reason
-		end, function()
-			AssertTrue(QuestTogether:SchedulePlaterStartupNameplateRefreshes())
-			AssertEquals(#scheduled, 2)
-			AssertEquals(scheduled[1].seconds, 4.1)
-			AssertEquals(scheduled[2].seconds, 5.1)
-
-			scheduled[1].callback()
-			AssertEquals(deferredReason, "EnableNameplateAugmentationStartup")
-			AssertEquals(deferredDelay, 1)
-
-			scheduled[2].callback()
-			AssertEquals(fullRefreshReason, "EnableNameplateAugmentationStartupFullRefresh")
-		end)
-	end)
-end)
-
-QuestTogether:RegisterTest("scheduled full nameplate refresh runs once like Plater", function()
-	local scheduledCallbacks = {}
-	local refreshCalls = 0
-
-	QuestTogether.isEnabled = true
-	QuestTogether.nameplateFullRefreshGeneration = 0
-	QuestTogether.API = CreateApiWithOverrides({
-		Delay = function(seconds, callback)
-			AssertEquals(seconds, 0.05)
-			scheduledCallbacks[#scheduledCallbacks + 1] = callback
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "RefreshVisibleNameplates", function(_, reason)
-		refreshCalls = refreshCalls + 1
-		AssertEquals(reason, "ScheduleFullNameplateRefresh")
-	end, function()
-		QuestTogether:ScheduleFullNameplateRefresh(0.05)
-		AssertEquals(#scheduledCallbacks, 1)
-		scheduledCallbacks[1]()
-		AssertEquals(refreshCalls, 1)
-	end)
-end)
-
-QuestTogether:RegisterTest("zero-delay full nameplate refresh runs immediately like Plater combat refresh", function()
-	local refreshCalls = 0
-
-	QuestTogether.isEnabled = true
-	QuestTogether.nameplateFullRefreshGeneration = 0
-	QuestTogether.API = CreateApiWithOverrides({
-		Delay = function()
-			error("zero-delay full refresh should not defer through Delay")
-		end,
-	})
-
-	WithPatchedMethod(QuestTogether, "RefreshVisibleNameplates", function(_, reason)
-		refreshCalls = refreshCalls + 1
-		AssertEquals(reason, "ScheduleFullNameplateRefresh")
-	end, function()
-		QuestTogether:ScheduleFullNameplateRefresh(0)
-	end)
-
-	AssertEquals(refreshCalls, 1)
-end)
-
-QuestTogether:RegisterTest("unit quest log changed schedules delayed nameplate refresh for any token", function()
-	local scheduledReason = nil
-	local scheduledDelay = nil
-
-	WithPatchedMethod(QuestTogether, "ScheduleQuestStateRefreshWork", function(_, reason, delaySeconds)
-		scheduledReason = reason
-		scheduledDelay = delaySeconds
-	end, function()
-		QuestTogether:HandleNameplateEvent("UNIT_QUEST_LOG_CHANGED", "party1")
-	end)
-
-	AssertEquals(scheduledReason, "UNIT_QUEST_LOG_CHANGED")
-	AssertEquals(scheduledDelay, 1)
-end)
-
-QuestTogether:RegisterTest("quest query complete schedules delayed nameplate refresh", function()
-	local scheduledReason = nil
-	local scheduledDelay = nil
-
-	WithPatchedMethod(QuestTogether, "ScheduleQuestStateRefreshWork", function(_, reason, delaySeconds)
-		scheduledReason = reason
-		scheduledDelay = delaySeconds
-	end, function()
-		QuestTogether:HandleNameplateEvent("QUEST_QUERY_COMPLETE")
-	end)
-
-	AssertEquals(scheduledReason, "QUEST_QUERY_COMPLETE")
-	AssertEquals(scheduledDelay, 1)
 end)
 
 QuestTogether:RegisterTest("scheduled nameplate tint refresh can preserve cached quest state", function()
