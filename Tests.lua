@@ -82,6 +82,9 @@ local function CreateApiWithOverrides(overrides)
 		GetInstanceInfo = function()
 			return nil
 		end,
+		IsInInstance = function()
+			return false
+		end,
 	}
 	for key, value in pairs(safeTaskAreaDefaults) do
 		merged[key] = value
@@ -2123,6 +2126,29 @@ QuestTogether:RegisterTest("progressbar objective text strips trailing parenthet
 	)
 end)
 
+QuestTogether:RegisterTest("normalized quest objective info formats progressbar objectives consistently", function()
+	QuestTogether.API = CreateApiWithOverrides({
+		GetQuestObjectiveInfo = function(questID, objectiveIndex, displayComplete)
+			AssertEquals(questID, 40404)
+			AssertEquals(objectiveIndex, 1)
+			AssertEquals(displayComplete, false)
+			return "Emerald Dreamway cleared (28%)", "progressbar", false, nil
+		end,
+		GetQuestProgressBarPercent = function(questID)
+			AssertEquals(questID, 40404)
+			return 28
+		end,
+	})
+
+	local objectiveText, objectiveType, finished, currentValue =
+		QuestTogether:GetNormalizedQuestObjectiveInfo(40404, 1, false)
+
+	AssertEquals(objectiveText, "28% Emerald Dreamway cleared")
+	AssertEquals(objectiveType, "progressbar")
+	AssertFalse(finished)
+	AssertEquals(currentValue, 28)
+end)
+
 QuestTogether:RegisterTest("quest nameplate icon display no longer requires attackable units", function()
 	QuestTogether.isEnabled = true
 	QuestTogether.db.profile.nameplateQuestIconEnabled = true
@@ -3196,6 +3222,50 @@ QuestTogether:RegisterTest("nameplate quest text cache includes live unfinished 
 	AssertEquals(QuestTogether.nameplateQuestTextCache["QT finished objective sentinel"], nil)
 end)
 
+QuestTogether:RegisterTest("nameplate quest text cache normalizes live progressbar objective texts", function()
+	local snapshotState = QuestTogether:GetQuestSnapshotStateStore()
+	local tracker = QuestTogether:GetPlayerTracker()
+	wipe(tracker)
+	snapshotState.byQuestID = {
+		[40404] = {
+			questID = 40404,
+			title = "Step Into the Life",
+			isHeader = false,
+			isHidden = false,
+		},
+	}
+	snapshotState.order = { 40404 }
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return false
+		end,
+		GetQuestLogIndexForQuestID = function(questID)
+			AssertEquals(questID, 40404)
+			return 9
+		end,
+		GetNumQuestLeaderBoards = function(questLogIndex)
+			AssertEquals(questLogIndex, 9)
+			return 1
+		end,
+		GetQuestObjectiveInfo = function(questID, objectiveIndex, displayComplete)
+			AssertEquals(questID, 40404)
+			AssertEquals(objectiveIndex, 1)
+			AssertEquals(displayComplete, false)
+			return "Emerald Dreamway cleared (28%)", "progressbar", false, nil
+		end,
+		GetQuestProgressBarPercent = function(questID)
+			AssertEquals(questID, 40404)
+			return 28
+		end,
+	})
+
+	QuestTogether:RebuildNameplateQuestTextCache()
+
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Step Into the Life"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["28% Emerald Dreamway cleared"])
+	AssertTrue(QuestTogether.nameplateQuestTextCache["Emerald Dreamway cleared"])
+end)
+
 QuestTogether:RegisterTest("nameplate quest text cache stays empty in instances", function()
 	QuestTogether.nameplateQuestTextCache["Stale Quest"] = true
 	QuestTogether.API = CreateApiWithOverrides({
@@ -3605,15 +3675,258 @@ QuestTogether:RegisterTest("personal bubble anchor persists per character and re
 	end)
 end)
 
-QuestTogether:RegisterTest("announcement bubbles are blocked in instance contexts", function()
+QuestTogether:RegisterTest("announcement bubbles use their own context policy instead of quest-nameplate instance policy", function()
+	local delegated = 0
+
 	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
 		return true
 	end, function()
-		local ok = QuestTogether:ShowAnnouncementBubbleOnNameplate({
-			UnitFrame = {},
-		}, "Test bubble")
-		AssertFalse(ok)
+		WithPatchedMethod(QuestTogether, "IsAnnouncementBubbleAugmentationBlockedInCurrentContext", function()
+			return false
+		end, function()
+			WithPatchedMethod(QuestTogether, "TryShowAnnouncementBubbleOnUnitNameplate", function(_, unitToken, text, eventType, iconAsset, iconKind)
+				delegated = delegated + 1
+				AssertEquals(unitToken, "player")
+				AssertEquals(text, "Test bubble")
+				AssertEquals(eventType, "QUEST_PROGRESS")
+				AssertEquals(iconAsset, "Interface\\Icons\\INV_Misc_QuestionMark")
+				AssertEquals(iconKind, "texture")
+				return true, "player"
+			end, function()
+				local ok, unitName = QuestTogether:ShowAnnouncementBubbleOnUnitNameplate(
+					"player",
+					"Test bubble",
+					"QUEST_PROGRESS",
+					"Interface\\Icons\\INV_Misc_QuestionMark",
+					"texture"
+				)
+				AssertTrue(ok)
+				AssertEquals(unitName, "player")
+			end)
+		end)
 	end)
+
+	AssertEquals(delegated, 1)
+end)
+
+QuestTogether:RegisterTest("announcement bubbles can still be blocked by their own context policy", function()
+	local delegated = 0
+
+	WithPatchedMethod(QuestTogether, "IsAnnouncementBubbleAugmentationBlockedInCurrentContext", function()
+		return true
+	end, function()
+		WithPatchedMethod(QuestTogether, "TryShowAnnouncementBubbleOnUnitNameplate", function()
+			delegated = delegated + 1
+			return true, "player"
+		end, function()
+			local ok, reason = QuestTogether:ShowAnnouncementBubbleOnUnitNameplate("player", "Test bubble")
+			AssertFalse(ok)
+			AssertEquals(reason, "Announcement bubbles are unavailable in the current context.")
+		end)
+	end)
+
+	AssertEquals(delegated, 0)
+end)
+
+QuestTogether:RegisterTest("nameplate capability notice reports quest plates unavailable while quest bubbles remain available in scenario-like instances", function()
+	QuestTogether.isEnabled = true
+	QuestTogether.db.profile.nameplateQuestIconEnabled = true
+	QuestTogether.db.profile.showChatBubbles = true
+	QuestTogether.db.profile.hideMyOwnChatBubbles = false
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		GetInstanceInfo = function()
+			return {
+				instanceType = "scenario",
+			}
+		end,
+	})
+
+	local report = QuestTogether:GetNameplateCapabilityNoticeReport()
+
+	AssertTrue(report ~= nil)
+	AssertEquals(report.header, "QuestTogether detects limited functionality in the current instance.")
+	AssertEquals(#report.lines, 3)
+	AssertEquals(report.lines[1], "|cffffd200Quest Plates: |r|cffff4444unavailable|r")
+	AssertEquals(report.lines[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(report.lines[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(
+		report.key,
+		"QuestTogether detects limited functionality in the current instance.\n"
+			.. "Quest Plates: unavailable\n"
+			.. "Personal Announcement Bubbles: available\n"
+			.. "Nearby-Player Announcement Bubbles: available"
+	)
+end)
+
+QuestTogether:RegisterTest("nameplate capability notice reports group-instance bubble limits separately from quest plates", function()
+	QuestTogether.isEnabled = true
+	QuestTogether.db.profile.nameplateQuestIconEnabled = true
+	QuestTogether.db.profile.showChatBubbles = true
+	QuestTogether.db.profile.hideMyOwnChatBubbles = false
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		GetInstanceInfo = function()
+			return {
+				instanceType = "party",
+			}
+		end,
+	})
+
+	local report = QuestTogether:GetNameplateCapabilityNoticeReport()
+
+	AssertTrue(report ~= nil)
+	AssertEquals(report.header, "QuestTogether detects limited functionality in the current instance.")
+	AssertEquals(#report.lines, 3)
+	AssertEquals(report.lines[1], "|cffffd200Quest Plates: |r|cffff4444unavailable|r")
+	AssertEquals(report.lines[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(report.lines[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cffff4444unavailable|r")
+	AssertEquals(
+		report.key,
+		"QuestTogether detects limited functionality in the current instance.\n"
+			.. "Quest Plates: unavailable\n"
+			.. "Personal Announcement Bubbles: available\n"
+			.. "Nearby-Player Announcement Bubbles: unavailable"
+	)
+end)
+
+QuestTogether:RegisterTest("nameplate capability report ignores features disabled by user options", function()
+	QuestTogether.isEnabled = true
+	QuestTogether.db.profile.nameplateQuestIconEnabled = false
+	QuestTogether.db.profile.showChatBubbles = true
+	QuestTogether.db.profile.hideMyOwnChatBubbles = true
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		GetInstanceInfo = function()
+			return {
+				instanceType = "party",
+			}
+		end,
+	})
+
+	local report = QuestTogether:GetNameplateCapabilityNoticeReport()
+
+	AssertTrue(report ~= nil)
+	AssertEquals(report.header, "QuestTogether detects limited functionality in the current instance.")
+	AssertEquals(#report.lines, 1)
+	AssertEquals(report.lines[1], "|cffffd200Nearby-Player Announcement Bubbles: |r|cffff4444unavailable|r")
+end)
+
+QuestTogether:RegisterTest("nameplate capability notices are one-shot per blocked context and reset when availability returns", function()
+	local warnings = {}
+	local details = {}
+
+	QuestTogether.isEnabled = true
+	QuestTogether.db.profile.nameplateQuestIconEnabled = true
+	QuestTogether.db.profile.showChatBubbles = true
+	QuestTogether.db.profile.hideMyOwnChatBubbles = false
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return true
+		end,
+		GetInstanceInfo = function()
+			return {
+				instanceType = "scenario",
+			}
+		end,
+	})
+
+	WithPatchedMethod(QuestTogether, "PrintChatLogSystemMessage", function(_, message)
+		warnings[#warnings + 1] = message
+	end, function()
+		WithPatchedMethod(QuestTogether, "PrintChatLogWarningMessage", function(_, message)
+			warnings[#warnings + 1] = message
+		end, function()
+			WithPatchedMethod(QuestTogether, "PrintChatLogWarningDetailMessage", function(_, message)
+				details[#details + 1] = message
+				return true
+			end, function()
+				WithPatchedMethod(QuestTogether, "ForEachVisibleNamePlate", function() end, function()
+					WithPatchedMethod(QuestTogether, "RefreshActiveAnnouncementBubbles", function() end, function()
+						QuestTogether:RefreshNameplateAugmentation()
+						QuestTogether:RefreshNameplateAugmentation()
+
+						QuestTogether.API = CreateApiWithOverrides({
+							IsInInstance = function()
+								return false
+							end,
+							GetInstanceInfo = function()
+								return {
+									instanceType = "",
+								}
+							end,
+						})
+						QuestTogether:RefreshNameplateAugmentation()
+
+						QuestTogether.API = CreateApiWithOverrides({
+							IsInInstance = function()
+								return true
+							end,
+							GetInstanceInfo = function()
+								return {
+									instanceType = "scenario",
+								}
+							end,
+						})
+						QuestTogether:RefreshNameplateAugmentation()
+					end)
+				end)
+			end)
+		end)
+	end)
+
+	AssertEquals(#warnings, 2)
+	AssertEquals(#details, 6)
+	AssertEquals(
+		warnings[1],
+		"QuestTogether detects limited functionality in the current instance."
+	)
+	AssertEquals(warnings[2], warnings[1])
+	AssertEquals(details[1], "|cffffd200Quest Plates: |r|cffff4444unavailable|r")
+	AssertEquals(details[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(details[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(details[4], details[1])
+	AssertEquals(details[5], details[2])
+	AssertEquals(details[6], details[3])
+end)
+
+QuestTogether:RegisterTest("chat log warning message uses warning styling", function()
+	local printed = {}
+	local expectedIcon = QuestTogether:GetQuestIconChatTag(14)
+
+	QuestTogether.PrintChatLogRaw = function(_, message)
+		printed[#printed + 1] = message
+	end
+
+	QuestTogether:PrintChatLogWarningMessage("Quest plates are unavailable here.")
+
+	AssertEquals(#printed, 1)
+	AssertEquals(
+		printed[1],
+		expectedIcon .. "|cffff8800Warning:|r |cffffd200Quest plates are unavailable here.|r"
+	)
+end)
+
+QuestTogether:RegisterTest("chat log warning detail message uses report styling", function()
+	local printed = {}
+
+	QuestTogether.PrintChatLogRaw = function(_, message)
+		printed[#printed + 1] = message
+	end
+
+	QuestTogether:PrintChatLogWarningDetailMessage("|cffffd200Quest Plates: |r|cffff4444unavailable|r")
+
+	AssertEquals(#printed, 1)
+	AssertEquals(
+		printed[1],
+		"|cffff8800 - |r|cffffd200Quest Plates: |r|cffff4444unavailable|r"
+	)
 end)
 
 QuestTogether:RegisterTest("console announcement message includes icon and player name", function()
@@ -4946,6 +5259,7 @@ end)
 QuestTogether:RegisterTest("nameplate health tint uses resolved quest state from icon refresh", function()
 	local appliedUnitFrame = nil
 	QuestTogether.isEnabled = true
+	QuestTogether.API = CreateApiWithOverrides({})
 	local namePlateFrameBase = {
 		GetUnit = function()
 			return "nameplate1"
@@ -4956,45 +5270,49 @@ QuestTogether:RegisterTest("nameplate health tint uses resolved quest state from
 		},
 	}
 
-	WithPatchedMethod(QuestTogether, "ShouldShowQuestNameplateIconForResolvedState", function(_, unitToken, unitFrame, isQuestObjective)
-		AssertEquals(unitToken, "nameplate1")
-		AssertEquals(unitFrame, namePlateFrameBase.UnitFrame)
-		AssertEquals(isQuestObjective, true)
+	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
 		return false
 	end, function()
-		WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function(_, unitToken, unitFrame, allowLiveScan)
+		WithPatchedMethod(QuestTogether, "ShouldShowQuestNameplateIconForResolvedState", function(_, unitToken, unitFrame, isQuestObjective)
 			AssertEquals(unitToken, "nameplate1")
 			AssertEquals(unitFrame, namePlateFrameBase.UnitFrame)
-			AssertEquals(allowLiveScan, false)
-			return true, true, "Creature-0-0-0-0-11111-0000000000"
+			AssertEquals(isQuestObjective, true)
+			return false
 		end, function()
-			WithPatchedMethod(QuestTogether, "ApplyQuestTintToNameplate", function(_, unitFrame)
-				appliedUnitFrame = unitFrame
-				return true
+			WithPatchedMethod(QuestTogether, "TryResolveNameplateQuestObjectiveState", function(_, unitToken, unitFrame, allowLiveScan)
+				AssertEquals(unitToken, "nameplate1")
+				AssertEquals(unitFrame, namePlateFrameBase.UnitFrame)
+				AssertEquals(allowLiveScan, false)
+				return true, true, "Creature-0-0-0-0-11111-0000000000"
 			end, function()
-						WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
-							return true
+				WithPatchedMethod(QuestTogether, "ApplyQuestTintToNameplate", function(_, unitFrame)
+					appliedUnitFrame = unitFrame
+					return true
+				end, function()
+					WithPatchedMethod(QuestTogether, "DoesNameplateUnitExist", function()
+						return true
+					end, function()
+						WithPatchedMethod(QuestTogether, "IsNameplateUnitPlayer", function()
+							return false
 						end, function()
-							WithPatchedMethod(QuestTogether, "IsNameplateUnitPlayer", function()
-								return false
+							WithPatchedMethod(QuestTogether, "IsNameplateUnitConnected", function()
+								return true
 							end, function()
-								WithPatchedMethod(QuestTogether, "IsNameplateUnitConnected", function()
-									return true
+								WithPatchedMethod(QuestTogether, "IsNameplateUnitDead", function()
+									return false
 								end, function()
-									WithPatchedMethod(QuestTogether, "IsNameplateUnitDead", function()
+									WithPatchedMethod(QuestTogether, "IsNameplateUnitTapDenied", function()
 										return false
 									end, function()
-										WithPatchedMethod(QuestTogether, "IsNameplateUnitTapDenied", function()
-											return false
-										end, function()
 										QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
 									end)
 								end)
 							end)
 						end)
 					end)
-					end)
 				end)
+			end)
+		end)
 	end)
 
 	AssertEquals(appliedUnitFrame, namePlateFrameBase.UnitFrame)
@@ -5037,20 +5355,25 @@ QuestTogether:RegisterTest("nameplate icon refresh uses cached state without que
 	}
 
 	QuestTogether.isEnabled = true
+	QuestTogether.API = CreateApiWithOverrides({})
 	QuestTogether.nameplateQuestStateByGuid["Creature-0-0-0-0-99999-0000000000"] = true
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate9"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate9"] = "Creature-0-0-0-0-99999-0000000000"
 
-	WithPatchedMethod(QuestTogether, "ApplyResolvedQuestStateToNameplate", function(_, frameBase, unitToken, unitFrame, isQuestObjective, scheduleTintFollowUp)
-		appliedQuestState = isQuestObjective
+	WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+		return false
 	end, function()
-		WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
-			error("cached icon refresh should not perform a live quest scan")
+		WithPatchedMethod(QuestTogether, "ApplyResolvedQuestStateToNameplate", function(_, frameBase, unitToken, unitFrame, isQuestObjective, scheduleTintFollowUp)
+			appliedQuestState = isQuestObjective
 		end, function()
-			WithPatchedMethod(QuestTogether, "ScheduleNameplateTooltipResolution", function(_, unitToken)
-				resolverUnitToken = unitToken
+			WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
+				error("cached icon refresh should not perform a live quest scan")
 			end, function()
-				QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
+				WithPatchedMethod(QuestTogether, "ScheduleNameplateTooltipResolution", function(_, unitToken)
+					resolverUnitToken = unitToken
+				end, function()
+					QuestTogether:RefreshNameplateIcon(namePlateFrameBase)
+				end)
 			end)
 		end)
 	end)
@@ -5312,27 +5635,32 @@ QuestTogether:RegisterTest("nameplate add clears stale visuals and refreshes imm
 	}
 
 	QuestTogether.isEnabled = true
+	QuestTogether.API = CreateApiWithOverrides({})
 	QuestTogether.nameplateQuestStateByUnitToken["nameplate12"] = true
 	QuestTogether.nameplateQuestGuidByUnitToken["nameplate12"] = "Creature-0-0-0-0-121212-0000000000"
 
 	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
 		return unitToken == "nameplate12"
 	end, function()
-		WithPatchedMethod(QuestTogether, "GetAccessibleNameplateFrameForUnit", function(_, unitToken, requireShown)
-			AssertEquals(unitToken, "nameplate12")
-			AssertEquals(requireShown, false)
-			return namePlateFrameBase, unitFrame
+		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+			return false
 		end, function()
-			WithPatchedMethod(QuestTogether, "HideNameplateIcon", function(_, frameBase)
-				hiddenFrame = frameBase
+			WithPatchedMethod(QuestTogether, "GetAccessibleNameplateFrameForUnit", function(_, unitToken, requireShown)
+				AssertEquals(unitToken, "nameplate12")
+				AssertEquals(requireShown, false)
+				return namePlateFrameBase, unitFrame
 			end, function()
-				WithPatchedMethod(QuestTogether, "RefreshNameplateIcon", function(_, frameBase)
-					refreshedFrame = frameBase
+				WithPatchedMethod(QuestTogether, "HideNameplateIcon", function(_, frameBase)
+					hiddenFrame = frameBase
 				end, function()
-					WithPatchedMethod(QuestTogether, "ScheduleNameplateRefresh", function(_, unitToken)
-						scheduledUnitToken = unitToken
+					WithPatchedMethod(QuestTogether, "RefreshNameplateIcon", function(_, frameBase)
+						refreshedFrame = frameBase
 					end, function()
-						QuestTogether:OnNameplateAdded("nameplate12")
+						WithPatchedMethod(QuestTogether, "ScheduleNameplateRefresh", function(_, unitToken)
+							scheduledUnitToken = unitToken
+						end, function()
+							QuestTogether:OnNameplateAdded("nameplate12")
+						end)
 					end)
 				end)
 			end)
@@ -5532,38 +5860,36 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh can preserve cached
 		end,
 	})
 
-	local ok, err = pcall(function()
-		WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
-			return unitToken == "nameplate9"
+	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
+		return unitToken == "nameplate9"
+	end, function()
+		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+			return false
 		end, function()
 			WithPatchedMethod(QuestTogether, "GetNameplateUnitGuid", function(_, unitToken)
 				AssertEquals(unitToken, "nameplate9")
 				return "Creature-0-0-0-0-99999-0000000000"
 			end, function()
-			WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
-				liveObjectiveChecks = liveObjectiveChecks + 1
-				return true, false, "Creature-0-0-0-0-99999-0000000000"
-			end, function()
-				WithPatchedMethod(QuestTogether, "ShouldApplyQuestHealthTint", function(_, candidateFrame, isQuestObjective)
-					AssertEquals(candidateFrame, unitFrame)
-					AssertEquals(isQuestObjective, true)
-					return true
+				WithPatchedMethod(QuestTogether, "TryEvaluateQuestObjectiveViaTooltip", function()
+					liveObjectiveChecks = liveObjectiveChecks + 1
+					return true, false, "Creature-0-0-0-0-99999-0000000000"
 				end, function()
-					WithPatchedMethod(QuestTogether, "ApplyQuestTintToNameplate", function(_, candidateFrame)
-						appliedUnitFrame = candidateFrame
+					WithPatchedMethod(QuestTogether, "ShouldApplyQuestHealthTint", function(_, candidateFrame, isQuestObjective)
+						AssertEquals(candidateFrame, unitFrame)
+						AssertEquals(isQuestObjective, true)
 						return true
 					end, function()
-						QuestTogether:ScheduleNameplateHealthTintRefresh("nameplate9", 0, true)
+						WithPatchedMethod(QuestTogether, "ApplyQuestTintToNameplate", function(_, candidateFrame)
+							appliedUnitFrame = candidateFrame
+							return true
+						end, function()
+							QuestTogether:ScheduleNameplateHealthTintRefresh("nameplate9", 0, true)
+						end)
 					end)
 				end)
 			end)
 		end)
-			end)
 	end)
-
-	if not ok then
-		error(err, 0)
-	end
 
 	AssertEquals(liveObjectiveChecks, 0)
 	AssertEquals(appliedUnitFrame, unitFrame)
@@ -5603,8 +5929,11 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh queues resolver whe
 		end,
 	})
 
-		WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
-			return unitToken == "nameplate9"
+	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
+		return unitToken == "nameplate9"
+	end, function()
+		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+			return false
 		end, function()
 			WithPatchedMethod(QuestTogether, "GetNameplateUnitGuid", function(_, unitToken)
 				AssertEquals(unitToken, "nameplate9")
@@ -5632,6 +5961,7 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh queues resolver whe
 				end)
 			end)
 		end)
+	end)
 	AssertEquals(appliedUnitFrame, nil)
 	AssertEquals(scheduledUnitToken, "nameplate9")
 end)
@@ -5668,8 +5998,11 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh ignores cached ques
 		end,
 	})
 
-		WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
-			return unitToken == "nameplate10"
+	WithPatchedMethod(QuestTogether, "IsNameplateUnitToken", function(_, unitToken)
+		return unitToken == "nameplate10"
+	end, function()
+		WithPatchedMethod(QuestTogether, "IsNameplateAugmentationBlockedInCurrentContext", function()
+			return false
 		end, function()
 			WithPatchedMethod(QuestTogether, "GetNameplateUnitGuid", function(_, unitToken)
 				AssertEquals(unitToken, "nameplate10")
@@ -5684,13 +6017,14 @@ QuestTogether:RegisterTest("scheduled nameplate tint refresh ignores cached ques
 				end, function()
 					WithPatchedMethod(QuestTogether, "ShouldApplyQuestHealthTint", function(_, candidateFrame, isQuestObjective)
 						AssertEquals(candidateFrame, unitFrame)
-					AssertEquals(isQuestObjective, false)
-					return false
-				end, function()
-					WithPatchedMethod(QuestTogether, "RestoreNameplateHealthColor", function(_, candidateFrame)
-						restoredUnitFrame = candidateFrame
+						AssertEquals(isQuestObjective, false)
+						return false
 					end, function()
-						QuestTogether:ScheduleNameplateHealthTintRefresh("nameplate10", 0, true)
+						WithPatchedMethod(QuestTogether, "RestoreNameplateHealthColor", function(_, candidateFrame)
+							restoredUnitFrame = candidateFrame
+						end, function()
+							QuestTogether:ScheduleNameplateHealthTintRefresh("nameplate10", 0, true)
+						end)
 					end)
 				end)
 			end)

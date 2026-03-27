@@ -410,31 +410,15 @@ function QuestTogether:UNIT_QUEST_LOG_CHANGED(_, unit)
 			local normalizedQuestId = NormalizeQuestId(self, questId)
 			if normalizedQuestId then
 				questId = normalizedQuestId
-					local questLogIndex = self.API.GetQuestLogIndexForQuestID and self.API.GetQuestLogIndexForQuestID(questId)
+					local questLogIndex = self.GetQuestLogIndexForQuest and self:GetQuestLogIndexForQuest(questId)
 					if questLogIndex then
 						local changedObjectives = {}
 						local numObjectives = self.API.GetNumQuestLeaderBoards and self.API.GetNumQuestLeaderBoards(questLogIndex)
 							or 0
 
 					for objectiveIndex = 1, numObjectives do
-						local objectiveText, objectiveType, _, currentValue = nil, nil, nil, nil
-						if self.API.GetQuestObjectiveInfo then
-							objectiveText, objectiveType, _, currentValue =
-								self.API.GetQuestObjectiveInfo(questId, objectiveIndex, false)
-						end
-						if objectiveText == nil and objectiveType == nil and currentValue == nil then
-							objectiveText = ""
-						end
-
-						if objectiveType == "progressbar" then
-							local progress = self.API.GetQuestProgressBarPercent
-								and self.API.GetQuestProgressBarPercent(questId)
-							local roundedProgress = self:NormalizeQuestProgressPercent(progress) or 0
-							objectiveText = SafeText(roundedProgress, "0")
-								.. "% "
-								.. SafeText(self:StripTrailingParentheticalPercent(objectiveText), "")
-							currentValue = roundedProgress
-						end
+						local objectiveText, _, _, currentValue =
+							self:GetNormalizedQuestObjectiveInfo(questId, objectiveIndex, false)
 
 						questData.objectiveValues = questData.objectiveValues or {}
 						local oldObjectiveText = questData.objectives[objectiveIndex]

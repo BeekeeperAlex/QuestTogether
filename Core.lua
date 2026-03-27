@@ -2475,6 +2475,22 @@ function QuestTogether:PrintChatLogSystemMessage(message)
 	self:PrintChatLogRaw("|cff33ff99QuestTogether|r: " .. self:SafeToString(message, ""))
 end
 
+function QuestTogether:PrintChatLogWarningMessage(message)
+	local warningPrefix = "|cffff8800Warning:|r"
+	local iconTag = self.GetQuestIconChatTag and self:GetQuestIconChatTag(14) or ""
+	if iconTag ~= "" then
+		warningPrefix = iconTag .. warningPrefix
+	end
+
+	self:PrintChatLogRaw(
+		warningPrefix .. " |cffffd200" .. self:SafeToString(message, "") .. "|r"
+	)
+end
+
+function QuestTogether:PrintChatLogWarningDetailMessage(message)
+	self:PrintChatLogRaw("|cffff8800 - |r" .. self:SafeToString(message, ""))
+end
+
 function QuestTogether:ShouldMirrorChatLogsToMainChat()
 	if not self.db or not self.db.profile or self.db.profile.mirrorChatLogsToMainChat ~= true then
 		return false
@@ -4356,6 +4372,65 @@ function QuestTogether:StripTrailingParentheticalPercent(objectiveText)
 	return strippedText
 end
 
+function QuestTogether:GetQuestLogIndexForQuest(questId, questInfo)
+	local questLogIndex = questInfo and self:SafeToNumber(questInfo.questLogIndex) or nil
+	if questLogIndex ~= nil then
+		questLogIndex = math.floor(questLogIndex + 0.5)
+		if questLogIndex <= 0 then
+			questLogIndex = nil
+		end
+	end
+
+	if not questLogIndex and self.API and self.API.GetQuestLogIndexForQuestID then
+		local normalizedQuestId = self:NormalizeQuestID(questId)
+		if normalizedQuestId then
+			local resolvedQuestLogIndex = self.API.GetQuestLogIndexForQuestID(normalizedQuestId)
+			questLogIndex = self:SafeToNumber(resolvedQuestLogIndex)
+			if questLogIndex ~= nil then
+				questLogIndex = math.floor(questLogIndex + 0.5)
+				if questLogIndex <= 0 then
+					questLogIndex = nil
+				end
+			end
+		end
+	end
+
+	return questLogIndex
+end
+
+function QuestTogether:GetNormalizedQuestObjectiveInfo(questId, objectiveIndex, displayComplete)
+	local objectiveText, objectiveType, finished, currentValue = nil, nil, nil, nil
+	if self.API and self.API.GetQuestObjectiveInfo then
+		objectiveText, objectiveType, finished, currentValue =
+			self.API.GetQuestObjectiveInfo(questId, objectiveIndex, displayComplete)
+	end
+	if objectiveText == nil and objectiveType == nil and currentValue == nil then
+		objectiveText = ""
+	end
+
+	if objectiveType == "progressbar" then
+		local baseObjectiveText = self:StripTrailingParentheticalPercent(objectiveText)
+		if type(baseObjectiveText) ~= "string" then
+			baseObjectiveText = type(objectiveText) == "string" and objectiveText or ""
+		end
+
+		local progress = self.API and self.API.GetQuestProgressBarPercent and self.API.GetQuestProgressBarPercent(questId)
+		local roundedProgress = self:NormalizeQuestProgressPercent(progress)
+		if roundedProgress ~= nil then
+			if baseObjectiveText ~= "" then
+				objectiveText = tostring(roundedProgress) .. "% " .. baseObjectiveText
+			else
+				objectiveText = tostring(roundedProgress) .. "%"
+			end
+			currentValue = roundedProgress
+		else
+			objectiveText = baseObjectiveText
+		end
+	end
+
+	return objectiveText, objectiveType, finished, currentValue
+end
+
 function QuestTogether:NormalizeNameplateOptions()
 	local profile = self.db.profile
 	if not self:IsNameplateQuestIconStyle(profile.nameplateQuestIconStyle) then
@@ -5914,18 +5989,7 @@ function QuestTogether:WatchQuest(questId, questInfo)
 	end
 
 	local tracker = self:GetPlayerTracker()
-	local questLogIndex = questInfo and self:SafeToNumber(questInfo.questLogIndex) or nil
-	if questLogIndex then
-		questLogIndex = math.floor(questLogIndex + 0.5)
-		if questLogIndex <= 0 then
-			questLogIndex = nil
-		end
-	end
-	if not questLogIndex then
-		questLogIndex = self.API
-			and self.API.GetQuestLogIndexForQuestID
-			and self.API.GetQuestLogIndexForQuestID(numericQuestId)
-	end
+	local questLogIndex = self.GetQuestLogIndexForQuest and self:GetQuestLogIndexForQuest(numericQuestId, questInfo) or nil
 	local questTitle = self:GetQuestTitle(numericQuestId, questInfo)
 	local existingTrackedQuest = tracker[numericQuestId]
 	if self:IsPlaceholderQuestTitle(numericQuestId, questTitle) then
@@ -5956,22 +6020,7 @@ function QuestTogether:WatchQuest(questId, questInfo)
 	local numObjectives = self.API and self.API.GetNumQuestLeaderBoards and self.API.GetNumQuestLeaderBoards(questLogIndex)
 		or 0
 	for objectiveIndex = 1, numObjectives do
-		local objectiveText, objectiveType, _, currentValue = nil, nil, nil, nil
-		if self.API and self.API.GetQuestObjectiveInfo then
-			objectiveText, objectiveType, _, currentValue =
-				self.API.GetQuestObjectiveInfo(numericQuestId, objectiveIndex, false)
-		end
-		if objectiveText == nil and objectiveType == nil and currentValue == nil then
-			objectiveText = ""
-		end
-		if objectiveType == "progressbar" then
-			local progress = self.API.GetQuestProgressBarPercent and self.API.GetQuestProgressBarPercent(numericQuestId)
-			local roundedProgress = self:NormalizeQuestProgressPercent(progress) or 0
-			objectiveText = tostring(roundedProgress)
-				.. "% "
-				.. tostring(self:StripTrailingParentheticalPercent(objectiveText))
-			currentValue = roundedProgress
-		end
+		local objectiveText, _, _, currentValue = self:GetNormalizedQuestObjectiveInfo(numericQuestId, objectiveIndex, false)
 		tracker[numericQuestId].objectives[objectiveIndex] = objectiveText
 		tracker[numericQuestId].objectiveValues[objectiveIndex] = self:SafeToNumber(currentValue)
 	end

@@ -1148,10 +1148,165 @@ function QuestTogether:GetAccessibleNameplateFrameForUnit(unitToken, requireShow
 	return namePlateFrameBase, namePlateFrameBase.UnitFrame
 end
 
--- Plater's update_quest_cache bails in instances in local retail Plater.lua:11373-11376.
+-- Quest objective detection is explicitly open-world-only. The tooltip-driven
+-- quest cache follows the same instance policy as Plater's update_quest_cache
+-- in local retail Plater.lua:11373-11376.
 function QuestTogether:IsNameplateAugmentationBlockedInCurrentContext()
 	local isInInstance = self.API and self.API.IsInInstance and self.API.IsInInstance()
 	return isInInstance and true or false
+end
+
+function QuestTogether:GetNameplateContextInfo()
+	local isInInstance = self.API and self.API.IsInInstance and self.API.IsInInstance() and true or false
+	local instanceType = ""
+	local instanceInfo = self.API and self.API.GetInstanceInfo and self.API.GetInstanceInfo() or nil
+	if type(instanceInfo) == "table" then
+		instanceType = string.lower(SafeText(instanceInfo.instanceType, ""))
+	end
+	if instanceType == "none" then
+		instanceType = ""
+	end
+
+	return {
+		isInInstance = isInInstance,
+		instanceType = instanceType,
+	}
+end
+
+-- Announcement bubbles only depend on visible mutable host frames plus
+-- addon-owned bubble state, so they do not inherit the quest-tooltip instance
+-- gate. Keep this policy split explicit instead of coupling bubbles to quest
+-- objective detection.
+function QuestTogether:IsAnnouncementBubbleAugmentationBlockedInCurrentContext()
+	return false
+end
+
+function QuestTogether:IsNearbyPlayerAnnouncementBubbleAugmentationBlockedInCurrentContext()
+	local contextInfo = self.GetNameplateContextInfo and self:GetNameplateContextInfo() or nil
+	if type(contextInfo) ~= "table" or contextInfo.isInInstance ~= true then
+		return false
+	end
+
+	local instanceType = SafeText(contextInfo.instanceType, "")
+	return instanceType == "party" or instanceType == "raid" or instanceType == "arena" or instanceType == "pvp"
+end
+
+local function BuildCapabilityStatusLabel(isAvailable)
+	if isAvailable then
+		return "|cff33ff99available|r", "available"
+	end
+
+	return "|cffff4444unavailable|r", "unavailable"
+end
+
+local function BuildCapabilityStatusLine(label, isAvailable)
+	local renderedStatus, plainStatus = BuildCapabilityStatusLabel(isAvailable)
+	local renderedLabel = "|cffffd200" .. SafeText(label, "") .. ": |r"
+	local plainLabel = SafeText(label, "")
+	return renderedLabel .. renderedStatus, plainLabel .. ": " .. plainStatus
+end
+
+function QuestTogether:GetNameplateCapabilityNoticeReport()
+	if not self.isEnabled then
+		return nil
+	end
+
+	local wantsQuestPlates = self.GetOption and self:GetOption("nameplateQuestIconEnabled") == true or false
+	local wantsChatBubbles = self.GetOption and self:GetOption("showChatBubbles") == true or false
+	local wantsNearbyPlayerBubbles = wantsChatBubbles
+	local wantsPersonalBubble = wantsChatBubbles and not (self.GetOption and self:GetOption("hideMyOwnChatBubbles") == true)
+
+	local questPlatesBlocked = wantsQuestPlates and self:IsNameplateAugmentationBlockedInCurrentContext() or false
+	local nearbyPlayerBubblesBlocked = wantsNearbyPlayerBubbles
+		and self:IsNearbyPlayerAnnouncementBubbleAugmentationBlockedInCurrentContext()
+		or false
+	local personalBubbleBlocked = wantsPersonalBubble and self:IsAnnouncementBubbleAugmentationBlockedInCurrentContext() or false
+
+	local lines = {}
+	local keyParts = {}
+	local hasLimitedFunctionality = false
+
+	if wantsQuestPlates then
+		local isAvailable = not questPlatesBlocked
+		local renderedLine, plainLine = BuildCapabilityStatusLine("Quest Plates", isAvailable)
+		if not isAvailable then
+			hasLimitedFunctionality = true
+		end
+		lines[#lines + 1] = renderedLine
+		keyParts[#keyParts + 1] = plainLine
+	end
+
+	if wantsPersonalBubble then
+		local isAvailable = not personalBubbleBlocked
+		local renderedLine, plainLine = BuildCapabilityStatusLine("Personal Announcement Bubbles", isAvailable)
+		if not isAvailable then
+			hasLimitedFunctionality = true
+		end
+		lines[#lines + 1] = renderedLine
+		keyParts[#keyParts + 1] = plainLine
+	end
+
+	if wantsNearbyPlayerBubbles then
+		local isAvailable = not nearbyPlayerBubblesBlocked
+		local renderedLine, plainLine = BuildCapabilityStatusLine("Nearby-Player Announcement Bubbles", isAvailable)
+		if not isAvailable then
+			hasLimitedFunctionality = true
+		end
+		lines[#lines + 1] = renderedLine
+		keyParts[#keyParts + 1] = plainLine
+	end
+
+	if not hasLimitedFunctionality or #lines == 0 then
+		return nil
+	end
+
+	local header = "QuestTogether detects limited functionality in the current instance."
+	local capabilityKey = header .. "\n" .. table.concat(keyParts, "\n")
+	return {
+		header = header,
+		lines = lines,
+		key = capabilityKey,
+	}
+end
+
+function QuestTogether:MaybeAnnounceNameplateCapabilityContextChange()
+	local noticeKey = "nameplateCapabilityNoticeKey"
+	if not self.isEnabled then
+		self:SetRuntimeFlag(noticeKey, nil)
+		return false
+	end
+
+	local report = self:GetNameplateCapabilityNoticeReport()
+	if type(report) ~= "table" or type(report.key) ~= "string" or report.key == "" then
+		self:SetRuntimeFlag(noticeKey, nil)
+		return false
+	end
+
+	if self:GetRuntimeFlag(noticeKey, nil) == report.key then
+		return false
+	end
+
+	self:SetRuntimeFlag(noticeKey, report.key)
+	if self.PrintChatLogWarningMessage then
+		self:PrintChatLogWarningMessage(report.header)
+		if type(report.lines) == "table" then
+			for index = 1, #report.lines do
+				local line = report.lines[index]
+				if type(line) == "string" and line ~= "" then
+					if self.PrintChatLogWarningDetailMessage then
+						self:PrintChatLogWarningDetailMessage(line)
+					else
+						self:PrintChatLogWarningMessage(line)
+					end
+				end
+			end
+		end
+	elseif self.PrintChatLogSystemMessage then
+		self:PrintChatLogSystemMessage(report.header)
+	else
+		self:PrintRaw("QuestTogether: " .. report.header)
+	end
+	return true
 end
 
 function QuestTogether:IsNameplateUnitPlayer(unitToken)
@@ -1726,12 +1881,10 @@ local function AddLiveQuestObjectiveTextsToNameplateCache(addon, cache, questID,
 		return
 	end
 
-	local questLogIndex = addon.SafeToNumber and addon:SafeToNumber(questDetails.questLogIndex) or nil
+	local questLogIndex = addon.GetQuestLogIndexForQuest
+		and addon:GetQuestLogIndexForQuest(questID, questDetails)
+		or nil
 	if questLogIndex == nil then
-		return
-	end
-	questLogIndex = math.floor(questLogIndex + 0.5)
-	if questLogIndex <= 0 then
 		return
 	end
 
@@ -1746,10 +1899,7 @@ local function AddLiveQuestObjectiveTextsToNameplateCache(addon, cache, questID,
 	end
 
 	for objectiveIndex = 1, objectiveCount do
-		local objectiveText, _, finished = nil, nil, nil
-		if api.GetQuestObjectiveInfo then
-			objectiveText, _, finished = api.GetQuestObjectiveInfo(questID, objectiveIndex, false)
-		end
+		local objectiveText, _, finished = addon:GetNormalizedQuestObjectiveInfo(questID, objectiveIndex, false)
 		if finished ~= true then
 			AddNameplateQuestTextToCache(cache, objectiveText)
 		end
@@ -1763,7 +1913,8 @@ end
 function QuestTogether:RebuildNameplateQuestTextCache()
 	wipe(self.nameplateQuestTextCache)
 
-	if self.API and self.API.IsInInstance and self.API.IsInInstance() then
+	local isInInstance = self.API and self.API.IsInInstance and self.API.IsInInstance()
+	if isInInstance then
 		return
 	end
 
@@ -3168,7 +3319,7 @@ function QuestTogether:HideAnnouncementBubble(hostFrame)
 end
 
 function QuestTogether:RefreshActiveAnnouncementBubbles()
-	if self:IsNameplateAugmentationBlockedInCurrentContext() then
+	if self:IsAnnouncementBubbleAugmentationBlockedInCurrentContext() then
 		for _, bubble in pairs(self.nameplateBubbleByUnitFrame) do
 			if bubble then
 				if bubble.animationGroup and bubble.animationGroup:IsPlaying() then
@@ -3241,7 +3392,7 @@ function QuestTogether:ShowAnnouncementBubbleOnNameplate(namePlateFrameBase, tex
 	if not CanMutateFrame(namePlateFrameBase) or not CanMutateFrame(unitFrame) then
 		return false
 	end
-	if self:IsNameplateAugmentationBlockedInCurrentContext() then
+	if self:IsAnnouncementBubbleAugmentationBlockedInCurrentContext() then
 		return false
 	end
 
@@ -3375,8 +3526,8 @@ function QuestTogether:ShowAnnouncementBubbleOnUnitNameplate(unitToken, text, ev
 	if type(unitToken) ~= "string" or unitToken == "" then
 		return false, "No unit token was provided."
 	end
-	if self:IsNameplateAugmentationBlockedInCurrentContext() then
-		return false, "Nameplate augmentation is unavailable in instances."
+	if self:IsAnnouncementBubbleAugmentationBlockedInCurrentContext() then
+		return false, "Announcement bubbles are unavailable in the current context."
 	end
 
 	if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then
@@ -3389,8 +3540,8 @@ function QuestTogether:ShowAnnouncementBubbleOnUnitNameplate(unitToken, text, ev
 end
 
 function QuestTogether:ShowAnnouncementBubbleOnRandomVisiblePlayer(text)
-	if self:IsNameplateAugmentationBlockedInCurrentContext() then
-		return false, "Nameplate augmentation is unavailable in instances."
+	if self:IsAnnouncementBubbleAugmentationBlockedInCurrentContext() then
+		return false, "Announcement bubbles are unavailable in the current context."
 	end
 
 	local candidateNameplates = {}
@@ -3543,10 +3694,19 @@ function QuestTogether:ScheduleNameplateHealthTintRefresh(unitToken, delaySecond
 			self:ForgetResolvedNameplateQuestState(unitToken)
 		end
 
+		local allowLiveScan = not preferCachedQuestState
+		if not allowLiveScan then
+			local cachedUnitGuid = self.nameplateQuestGuidByUnitToken[liveUnitToken]
+			local liveUnitGuid = self:GetNameplateTooltipScanGuid(liveUnitToken, unitFrame)
+			if not IsNonEmptyString(cachedUnitGuid) or not IsNonEmptyString(liveUnitGuid) or cachedUnitGuid ~= liveUnitGuid then
+				allowLiveScan = true
+			end
+		end
+
 		local hasResolvedQuestState, isQuestObjective = self:TryResolveNameplateQuestObjectiveState(
 			liveUnitToken,
 			unitFrame,
-			not preferCachedQuestState
+			allowLiveScan
 		)
 		if not hasResolvedQuestState then
 			self:ForgetResolvedNameplateQuestState(liveUnitToken)
@@ -3785,6 +3945,8 @@ function QuestTogether:FindNearbyPlayerUnitTokenForSender(senderGUID, senderName
 end
 
 function QuestTogether:RefreshNameplateAugmentation()
+	self:MaybeAnnounceNameplateCapabilityContextChange()
+
 	if self:IsNameplateAugmentationBlockedInCurrentContext() then
 		self:ClearNameplateQuestDetectionCache()
 		wipe(self.nameplateQuestStateByUnitToken)
