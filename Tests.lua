@@ -3818,9 +3818,45 @@ QuestTogether:RegisterTest("nameplate capability report ignores features disable
 	AssertEquals(report.lines[1], "|cffffd200Nearby-Player Announcement Bubbles: |r|cffff4444unavailable|r")
 end)
 
+QuestTogether:RegisterTest("nameplate capability report returns full availability status when enabled features are available", function()
+	QuestTogether.isEnabled = true
+	QuestTogether.db.profile.nameplateQuestIconEnabled = true
+	QuestTogether.db.profile.showChatBubbles = true
+	QuestTogether.db.profile.hideMyOwnChatBubbles = false
+	QuestTogether.API = CreateApiWithOverrides({
+		IsInInstance = function()
+			return false
+		end,
+		GetInstanceInfo = function()
+			return {
+				instanceType = "",
+			}
+		end,
+	})
+
+	local report = QuestTogether:GetNameplateCapabilityNoticeReport()
+
+	AssertTrue(report ~= nil)
+	AssertEquals(report.mode, "full")
+	AssertEquals(report.header, "Full QuestTogether functionality is available again.")
+	AssertEquals(#report.lines, 3)
+	AssertEquals(report.lines[1], "|cffffd200Quest Plates: |r|cff33ff99available|r")
+	AssertEquals(report.lines[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(report.lines[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(
+		report.key,
+		"Full QuestTogether functionality is available again.\n"
+			.. "Quest Plates: available\n"
+			.. "Personal Announcement Bubbles: available\n"
+			.. "Nearby-Player Announcement Bubbles: available"
+	)
+end)
+
 QuestTogether:RegisterTest("nameplate capability notices are one-shot per blocked context and reset when availability returns", function()
 	local warnings = {}
-	local details = {}
+	local warningDetails = {}
+	local infos = {}
+	local infoDetails = {}
 
 	QuestTogether.isEnabled = true
 	QuestTogether.db.profile.nameplateQuestIconEnabled = true
@@ -3844,37 +3880,46 @@ QuestTogether:RegisterTest("nameplate capability notices are one-shot per blocke
 			warnings[#warnings + 1] = message
 		end, function()
 			WithPatchedMethod(QuestTogether, "PrintChatLogWarningDetailMessage", function(_, message)
-				details[#details + 1] = message
+				warningDetails[#warningDetails + 1] = message
 				return true
 			end, function()
-				WithPatchedMethod(QuestTogether, "ForEachVisibleNamePlate", function() end, function()
-					WithPatchedMethod(QuestTogether, "RefreshActiveAnnouncementBubbles", function() end, function()
-						QuestTogether:RefreshNameplateAugmentation()
-						QuestTogether:RefreshNameplateAugmentation()
+				WithPatchedMethod(QuestTogether, "PrintChatLogInfoMessage", function(_, message)
+					infos[#infos + 1] = message
+				end, function()
+					WithPatchedMethod(QuestTogether, "PrintChatLogInfoDetailMessage", function(_, message)
+						infoDetails[#infoDetails + 1] = message
+						return true
+					end, function()
+						WithPatchedMethod(QuestTogether, "ForEachVisibleNamePlate", function() end, function()
+							WithPatchedMethod(QuestTogether, "RefreshActiveAnnouncementBubbles", function() end, function()
+								QuestTogether:RefreshNameplateAugmentation()
+								QuestTogether:RefreshNameplateAugmentation()
 
-						QuestTogether.API = CreateApiWithOverrides({
-							IsInInstance = function()
-								return false
-							end,
-							GetInstanceInfo = function()
-								return {
-									instanceType = "",
-								}
-							end,
-						})
-						QuestTogether:RefreshNameplateAugmentation()
+								QuestTogether.API = CreateApiWithOverrides({
+									IsInInstance = function()
+										return false
+									end,
+									GetInstanceInfo = function()
+										return {
+											instanceType = "",
+										}
+									end,
+								})
+								QuestTogether:RefreshNameplateAugmentation()
 
-						QuestTogether.API = CreateApiWithOverrides({
-							IsInInstance = function()
-								return true
-							end,
-							GetInstanceInfo = function()
-								return {
-									instanceType = "scenario",
-								}
-							end,
-						})
-						QuestTogether:RefreshNameplateAugmentation()
+								QuestTogether.API = CreateApiWithOverrides({
+									IsInInstance = function()
+										return true
+									end,
+									GetInstanceInfo = function()
+										return {
+											instanceType = "scenario",
+										}
+									end,
+								})
+								QuestTogether:RefreshNameplateAugmentation()
+							end)
+						end)
 					end)
 				end)
 			end)
@@ -3882,18 +3927,24 @@ QuestTogether:RegisterTest("nameplate capability notices are one-shot per blocke
 	end)
 
 	AssertEquals(#warnings, 2)
-	AssertEquals(#details, 6)
+	AssertEquals(#warningDetails, 6)
+	AssertEquals(#infos, 1)
+	AssertEquals(#infoDetails, 3)
 	AssertEquals(
 		warnings[1],
 		"QuestTogether detects limited functionality in the current instance."
 	)
 	AssertEquals(warnings[2], warnings[1])
-	AssertEquals(details[1], "|cffffd200Quest Plates: |r|cffff4444unavailable|r")
-	AssertEquals(details[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
-	AssertEquals(details[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cff33ff99available|r")
-	AssertEquals(details[4], details[1])
-	AssertEquals(details[5], details[2])
-	AssertEquals(details[6], details[3])
+	AssertEquals(warningDetails[1], "|cffffd200Quest Plates: |r|cffff4444unavailable|r")
+	AssertEquals(warningDetails[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(warningDetails[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(warningDetails[4], warningDetails[1])
+	AssertEquals(warningDetails[5], warningDetails[2])
+	AssertEquals(warningDetails[6], warningDetails[3])
+	AssertEquals(infos[1], "Full QuestTogether functionality is available again.")
+	AssertEquals(infoDetails[1], "|cffffd200Quest Plates: |r|cff33ff99available|r")
+	AssertEquals(infoDetails[2], "|cffffd200Personal Announcement Bubbles: |r|cff33ff99available|r")
+	AssertEquals(infoDetails[3], "|cffffd200Nearby-Player Announcement Bubbles: |r|cff33ff99available|r")
 end)
 
 QuestTogether:RegisterTest("chat log warning message uses warning styling", function()
@@ -3926,6 +3977,39 @@ QuestTogether:RegisterTest("chat log warning detail message uses report styling"
 	AssertEquals(
 		printed[1],
 		"|cffff8800 - |r|cffffd200Quest Plates: |r|cffff4444unavailable|r"
+	)
+end)
+
+QuestTogether:RegisterTest("chat log info message uses info styling", function()
+	local printed = {}
+	local expectedIcon = QuestTogether:GetQuestIconChatTag(14)
+
+	QuestTogether.PrintChatLogRaw = function(_, message)
+		printed[#printed + 1] = message
+	end
+
+	QuestTogether:PrintChatLogInfoMessage("Full QuestTogether functionality is available again.")
+
+	AssertEquals(#printed, 1)
+	AssertEquals(
+		printed[1],
+		expectedIcon .. "|cff33ff99Info:|r |cffffd200Full QuestTogether functionality is available again.|r"
+	)
+end)
+
+QuestTogether:RegisterTest("chat log info detail message uses report styling", function()
+	local printed = {}
+
+	QuestTogether.PrintChatLogRaw = function(_, message)
+		printed[#printed + 1] = message
+	end
+
+	QuestTogether:PrintChatLogInfoDetailMessage("|cffffd200Quest Plates: |r|cff33ff99available|r")
+
+	AssertEquals(#printed, 1)
+	AssertEquals(
+		printed[1],
+		"|cff33ff99 - |r|cffffd200Quest Plates: |r|cff33ff99available|r"
 	)
 end)
 

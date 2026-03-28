@@ -1257,12 +1257,18 @@ function QuestTogether:GetNameplateCapabilityNoticeReport()
 	end
 
 	if not hasLimitedFunctionality or #lines == 0 then
-		return nil
+		if #lines == 0 then
+			return nil
+		end
 	end
 
-	local header = "QuestTogether detects limited functionality in the current instance."
+	local mode = hasLimitedFunctionality and "limited" or "full"
+	local header = hasLimitedFunctionality
+		and "QuestTogether detects limited functionality in the current instance."
+		or "Full QuestTogether functionality is available again."
 	local capabilityKey = header .. "\n" .. table.concat(keyParts, "\n")
 	return {
+		mode = mode,
 		header = header,
 		lines = lines,
 		key = capabilityKey,
@@ -1271,32 +1277,67 @@ end
 
 function QuestTogether:MaybeAnnounceNameplateCapabilityContextChange()
 	local noticeKey = "nameplateCapabilityNoticeKey"
+	local noticeModeKey = "nameplateCapabilityNoticeMode"
 	if not self.isEnabled then
 		self:SetRuntimeFlag(noticeKey, nil)
+		self:SetRuntimeFlag(noticeModeKey, nil)
 		return false
 	end
 
 	local report = self:GetNameplateCapabilityNoticeReport()
 	if type(report) ~= "table" or type(report.key) ~= "string" or report.key == "" then
 		self:SetRuntimeFlag(noticeKey, nil)
+		self:SetRuntimeFlag(noticeModeKey, nil)
 		return false
 	end
 
-	if self:GetRuntimeFlag(noticeKey, nil) == report.key then
+	local previousKey = self:GetRuntimeFlag(noticeKey, nil)
+	local previousMode = self:GetRuntimeFlag(noticeModeKey, nil)
+	if previousKey == report.key and previousMode == report.mode then
 		return false
 	end
 
 	self:SetRuntimeFlag(noticeKey, report.key)
-	if self.PrintChatLogWarningMessage then
-		self:PrintChatLogWarningMessage(report.header)
+	self:SetRuntimeFlag(noticeModeKey, report.mode)
+
+	local shouldAnnounce = report.mode == "limited" or previousMode == "limited"
+	if not shouldAnnounce then
+		return false
+	end
+
+	if report.mode == "limited" then
+		if self.PrintChatLogWarningMessage then
+			self:PrintChatLogWarningMessage(report.header)
+			if type(report.lines) == "table" then
+				for index = 1, #report.lines do
+					local line = report.lines[index]
+					if type(line) == "string" and line ~= "" then
+						if self.PrintChatLogWarningDetailMessage then
+							self:PrintChatLogWarningDetailMessage(line)
+						else
+							self:PrintChatLogWarningMessage(line)
+						end
+					end
+				end
+			end
+		elseif self.PrintChatLogSystemMessage then
+			self:PrintChatLogSystemMessage(report.header)
+		else
+			self:PrintRaw("QuestTogether: " .. report.header)
+		end
+		return true
+	end
+
+	if self.PrintChatLogInfoMessage then
+		self:PrintChatLogInfoMessage(report.header)
 		if type(report.lines) == "table" then
 			for index = 1, #report.lines do
 				local line = report.lines[index]
 				if type(line) == "string" and line ~= "" then
-					if self.PrintChatLogWarningDetailMessage then
-						self:PrintChatLogWarningDetailMessage(line)
+					if self.PrintChatLogInfoDetailMessage then
+						self:PrintChatLogInfoDetailMessage(line)
 					else
-						self:PrintChatLogWarningMessage(line)
+						self:PrintChatLogInfoMessage(line)
 					end
 				end
 			end

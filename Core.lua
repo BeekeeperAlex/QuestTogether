@@ -2487,8 +2487,24 @@ function QuestTogether:PrintChatLogWarningMessage(message)
 	)
 end
 
+function QuestTogether:PrintChatLogInfoMessage(message)
+	local infoPrefix = "|cff33ff99Info:|r"
+	local iconTag = self.GetQuestIconChatTag and self:GetQuestIconChatTag(14) or ""
+	if iconTag ~= "" then
+		infoPrefix = iconTag .. infoPrefix
+	end
+
+	self:PrintChatLogRaw(
+		infoPrefix .. " |cffffd200" .. self:SafeToString(message, "") .. "|r"
+	)
+end
+
 function QuestTogether:PrintChatLogWarningDetailMessage(message)
 	self:PrintChatLogRaw("|cffff8800 - |r" .. self:SafeToString(message, ""))
+end
+
+function QuestTogether:PrintChatLogInfoDetailMessage(message)
+	self:PrintChatLogRaw("|cff33ff99 - |r" .. self:SafeToString(message, ""))
 end
 
 function QuestTogether:ShouldMirrorChatLogsToMainChat()
