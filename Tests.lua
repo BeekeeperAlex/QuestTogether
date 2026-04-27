@@ -7597,8 +7597,76 @@ QuestTogether:RegisterTest("local announcement hides own bubble when configured"
 			text = "Quest Accepted: Test Quest",
 		}, true)
 
-		AssertTrue(handled)
-		AssertEquals(#printed, 1)
-		AssertEquals(bubbleCalls, 0)
+	AssertTrue(handled)
+	AssertEquals(#printed, 1)
+	AssertEquals(bubbleCalls, 0)
+end)
+
+QuestTogether:RegisterTest("refresh active announcement bubbles does not replay an already playing personal bubble", function()
+	local showCalls = 0
+	local unitFrame = {}
+	local bubble = {
+		animationGroup = {
+			IsPlaying = function()
+				return true
+			end,
+		},
+	}
+	local screenHostFrame = {
+		UnitFrame = unitFrame,
+	}
+
+	QuestTogether.announcementBubbleScreenHostFrame = screenHostFrame
+	QuestTogether.nameplateBubbleByUnitFrame[unitFrame] = bubble
+	QuestTogether.nameplateBubbleStateByFrame[bubble] = {
+		text = "80% Locations Photographed",
+		eventType = "QUEST_PROGRESS",
+		unitToken = "player",
+	}
+
+	WithPatchedMethod(QuestTogether, "IsAnnouncementBubbleAugmentationBlockedInCurrentContext", function()
+		return false
+	end, function()
+		WithPatchedMethod(QuestTogether, "GetAnnouncementBubbleHostFrameForUnit", function(_, unitToken)
+			AssertEquals(unitToken, "player")
+			return screenHostFrame
+		end, function()
+			WithPatchedMethod(QuestTogether, "ShowAnnouncementBubbleOnNameplate", function()
+				showCalls = showCalls + 1
+				return true
+			end, function()
+				QuestTogether:RefreshActiveAnnouncementBubbles()
+			end)
+		end)
 	end)
+
+	AssertEquals(showCalls, 0)
+end)
+
+QuestTogether:RegisterTest("hide announcement bubble clears stored bubble state", function()
+	local unitFrame = {}
+	local bubble = {
+		animationGroup = {
+			IsPlaying = function()
+				return false
+			end,
+		},
+		SetAlpha = function() end,
+		Hide = function() end,
+	}
+	local hostFrame = {
+		UnitFrame = unitFrame,
+	}
+
+	QuestTogether.nameplateBubbleByUnitFrame[unitFrame] = bubble
+	QuestTogether.nameplateBubbleStateByFrame[bubble] = {
+		text = "80% Locations Photographed",
+		eventType = "QUEST_PROGRESS",
+		unitToken = "player",
+	}
+
+	QuestTogether:HideAnnouncementBubble(hostFrame)
+
+	AssertEquals(QuestTogether.nameplateBubbleStateByFrame[bubble], nil)
+end)
 end)

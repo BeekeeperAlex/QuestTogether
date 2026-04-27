@@ -3328,6 +3328,7 @@ local function EnsureAnnouncementBubble(hostFrame)
 		bubble:Hide()
 	end)
 	animationGroup:SetScript("OnStop", function()
+		ClearAnnouncementBubbleState(bubble)
 		bubble:SetAlpha(0)
 		bubble:Hide()
 	end)
@@ -3350,6 +3351,7 @@ function QuestTogether:HideAnnouncementBubble(hostFrame)
 	if not bubble then
 		return
 	end
+	ClearAnnouncementBubbleState(bubble)
 
 	if bubble.animationGroup and bubble.animationGroup:IsPlaying() then
 		bubble.animationGroup:Stop()
@@ -3379,13 +3381,15 @@ function QuestTogether:RefreshActiveAnnouncementBubbles()
 			local hostFrame = bubbleState.unitToken and self:GetAnnouncementBubbleHostFrameForUnit(bubbleState.unitToken) or nil
 			if hostFrame and self:GetOption("showChatBubbles") then
 				if hostFrame == self.announcementBubbleScreenHostFrame or (hostFrame.IsShown and hostFrame:IsShown()) then
-					self:ShowAnnouncementBubbleOnNameplate(
-						hostFrame,
-						bubbleState.text,
-						bubbleState.eventType,
-						bubbleState.iconAsset,
-						bubbleState.iconKind
-					)
+					if not (bubble.animationGroup and bubble.animationGroup:IsPlaying()) then
+						self:ShowAnnouncementBubbleOnNameplate(
+							hostFrame,
+							bubbleState.text,
+							bubbleState.eventType,
+							bubbleState.iconAsset,
+							bubbleState.iconKind
+						)
+					end
 				else
 					self:HideAnnouncementBubble(hostFrame)
 				end
@@ -3460,6 +3464,9 @@ function QuestTogether:ShowAnnouncementBubbleOnNameplate(namePlateFrameBase, tex
 	if not IsNonEmptyString(bubbleUnitToken) then
 		return false
 	end
+	if bubble.animationGroup and bubble.animationGroup:IsPlaying() then
+		bubble.animationGroup:Stop()
+	end
 	SetAnnouncementBubbleState(bubble, {
 		text = message,
 		eventType = type(eventType) == "string" and eventType ~= "" and eventType or nil,
@@ -3483,10 +3490,6 @@ function QuestTogether:ShowAnnouncementBubbleOnNameplate(namePlateFrameBase, tex
 	local iconGap = SafeUiNumber(visualConfig.iconGap, 8)
 	local fontSize = SafeUiNumber(visualConfig.fontSize, 14)
 	local lifetimeSeconds = SafeUiNumber(GetAnnouncementBubbleLifetimeSeconds(), QuestTogether.DEFAULTS.profile.chatBubbleDuration)
-
-	if bubble.animationGroup and bubble.animationGroup:IsPlaying() then
-		bubble.animationGroup:Stop()
-	end
 
 	if bubble.holdAnimation then
 		local holdSeconds = math.max(
